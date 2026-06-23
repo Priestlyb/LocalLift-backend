@@ -51,6 +51,6 @@ app.use("/api/v1/subscription", subscriptionRoutes);
 // app.use("/api/v1/content", contentRoutes);
 
 app.use("/api/v1/analytics", analyticsRoutes);
-app.use("/api/v1/payments", paymentRoutes);
+//app.use("/api/v1/payments", paymentRoutes);
 
 export default app;
