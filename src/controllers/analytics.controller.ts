@@ -3,6 +3,7 @@ import { Response } from "express";
 import Content from "../models/Content";
 import Business from "../models/Business";
 import Subscription from "../models/Subscription";
+import User from "../models/User";
 
 import { AuthRequest } from "../middleware/auth.middleware";
 import { getOrCreateUsage } from "../services/usage.service";
@@ -13,13 +14,18 @@ export const getDashboardAnalytics = async (
   res: Response
 ) => {
   try {
+    const user = await User.findById(
+      req.userId
+    ).select("name");
+
     const business = await Business.findOne({
       owner: req.userId,
     });
 
-    const subscription = await Subscription.findOne({
-      user: req.userId,
-    });
+    const subscription =
+      await Subscription.findOne({
+        user: req.userId,
+      });
 
     const usage = await getOrCreateUsage(
       req.userId!
@@ -46,7 +52,7 @@ export const getDashboardAnalytics = async (
 
     const planConfig =
       PLANS[
-      currentPlan as keyof typeof PLANS
+        currentPlan as keyof typeof PLANS
       ];
 
     const limit =
@@ -63,29 +69,31 @@ export const getDashboardAnalytics = async (
     const usagePercentage =
       limit > 0
         ? Math.min(
-          100,
-          Math.round((used / limit) * 100)
-        )
+            100,
+            Math.round((used / limit) * 100)
+          )
         : 0;
 
     return res.status(200).json({
+      adminName: user?.name || null,
+
       hasBusiness: !!business,
 
       business: business
         ? {
-          id: business._id,
-          businessName:
-            business.businessName,
-          category:
-            business.category,
-          description:
-            business.description,
-          city: business.city,
-          state: business.state,
-          country:
-            business.country,
-          logo: business.logo,
-        }
+            id: business._id,
+            businessName:
+              business.businessName,
+            category:
+              business.category,
+            description:
+              business.description,
+            city: business.city,
+            state: business.state,
+            country:
+              business.country,
+            logo: business.logo,
+          }
         : null,
 
       subscription: {

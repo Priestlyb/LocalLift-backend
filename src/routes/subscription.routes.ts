@@ -1,6 +1,9 @@
 import { Router } from "express";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+    protect,
+    authorize
+} from "../middleware/auth.middleware";
 
 import {
     getSubscription,
@@ -13,18 +16,21 @@ const router = Router();
 router.get(
     "/",
     protect,
+    authorize("CUSTOMER"),
     getSubscription
 );
 
 router.post(
     "/upgrade",
     protect,
+    authorize("CUSTOMER"),
     upgradeSubscription
 );
 
 router.post(
     "/cancel",
     protect,
+    authorize("CUSTOMER"),
     cancelSubscription
 );
 

@@ -7,7 +7,10 @@ import {
     paystackWebhook,
 } from "../controllers/payment.controller";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+    protect,
+    authorize
+} from "../middleware/auth.middleware";
 import { validateInitializePayment } from "../validators/payment.validator";
 
 const router = Router();
@@ -20,6 +23,7 @@ const router = Router();
 router.post(
     "/initialize",
     protect,
+    authorize("CUSTOMER"),
     validateInitializePayment,
     initializePayment
 );
@@ -28,6 +32,7 @@ router.post(
 router.get(
     "/verify/:reference",
     protect,
+    authorize("CUSTOMER"),
     verifyPayment
 );
 

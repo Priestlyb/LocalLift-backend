@@ -9,6 +9,7 @@ import subscriptionRoutes from "./routes/subscription.routes";
 import contentRoutes from "./routes/content.routes";
 import analyticsRoutes from "./routes/analytics.routes";
 import paymentRoutes from "./routes/payment.routes";
+import adminRoutes from "./routes/admin.routes"
 
 const app = express();
 
@@ -43,6 +44,12 @@ app.get("/", (_, res) => {
     message: "LocalLift API Running",
   });
 });
+
+//ADMIN
+app.use(
+  "/api/v1/admin",
+  adminRoutes
+);
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/business", businessRoutes);

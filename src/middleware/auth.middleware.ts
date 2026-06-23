@@ -1,8 +1,25 @@
-import { Request, Response, NextFunction } from "express";
+import {
+  Request,
+  Response,
+  NextFunction,
+} from "express";
 import jwt from "jsonwebtoken";
 
-export interface AuthRequest extends Request {
+export interface AuthRequest
+  extends Request {
   userId?: string;
+  role?:
+    | "ADMIN"
+    | "CUSTOMER"
+    | "CUSTOMER_STAFF";
+}
+
+interface JwtPayload {
+  userId: string;
+  role:
+    | "ADMIN"
+    | "CUSTOMER"
+    | "CUSTOMER_STAFF";
 }
 
 export const protect = (
@@ -11,7 +28,8 @@ export const protect = (
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
+    const authHeader =
+      req.headers.authorization;
 
     if (!authHeader) {
       return res.status(401).json({
@@ -19,14 +37,22 @@ export const protect = (
       });
     }
 
-    const token = authHeader.split(" ")[1];
+    const token =
+      authHeader.split(" ")[1];
+
+    if (!token) {
+      return res.status(401).json({
+        message: "Invalid token format",
+      });
+    }
 
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET!
-    ) as { id: string };
+    ) as JwtPayload;
 
-    req.userId = decoded.id;
+    req.userId = decoded.userId;
+    req.role = decoded.role;
 
     next();
   } catch (error) {
@@ -34,4 +60,34 @@ export const protect = (
       message: "Invalid token",
     });
   }
+};
+
+export const authorize = (
+  ...roles: Array<
+    | "ADMIN"
+    | "CUSTOMER"
+    | "CUSTOMER_STAFF"
+  >
+) => {
+  return (
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+  ) => {
+    if (!req.role) {
+      return res.status(401).json({
+        message: "Unauthorized",
+      });
+    }
+
+    if (
+      !roles.includes(req.role)
+    ) {
+      return res.status(403).json({
+        message: "Forbidden",
+      });
+    }
+
+    next();
+  };
 };

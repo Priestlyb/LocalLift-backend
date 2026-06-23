@@ -1,27 +1,45 @@
 import { Router } from "express";
-import {
-  register,
-  login,
-  getProfile,
-  deleteUser,
-  logout,
-} from "../controllers/auth.controller";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+  getUsers,
+  getBusinesses,
+  getSubscriptions,
+  deleteUserByAdmin
+} from "../controllers/admin.controller";
+
+import {
+  protect,
+  authorize,
+} from "../middleware/auth.middleware";
 
 const router = Router();
 
-// Public routes
-router.post("/register", register);
-router.post("/login", login);
-
-// Protected routes
-router.post(
-  "/logout",
+router.get(
+  "/users",
   protect,
-  logout
+  authorize("CUSTOMER"),
+  getUsers
 );
-router.get("/profile", protect, getProfile);
-router.delete("/delete", protect, deleteUser);
+
+router.get(
+  "/businesses",
+  protect,
+  authorize("CUSTOMER"),
+  getBusinesses
+);
+
+router.get(
+  "/subscriptions",
+  protect,
+  authorize("CUSTOMER"),
+  getSubscriptions
+);
+
+router.delete(
+  "/users/:id",
+  protect,
+  authorize("CUSTOMER"),
+  deleteUserByAdmin
+);
 
 export default router;

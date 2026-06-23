@@ -1,6 +1,9 @@
 import { Router } from "express";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+  protect,
+  authorize
+} from "../middleware/auth.middleware";
 
 import {
   generateContent,
@@ -15,30 +18,35 @@ const router = Router();
 router.post(
   "/generate",
   protect,
+  authorize("CUSTOMER"),
   generateContent
 );
 
 router.get(
   "/history",
   protect,
+  authorize("CUSTOMER"),
   getHistory
 );
 
 router.get(
   "/usage",
   protect,
+  authorize("CUSTOMER"),
   getUsage
 );
 
 router.get(
   "/:id",
   protect,
+  authorize("CUSTOMER"),
   getContentById
 );
 
 router.delete(
   "/:id",
   protect,
+  authorize("CUSTOMER"),
   deleteContent
 );
 

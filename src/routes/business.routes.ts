@@ -7,7 +7,10 @@ import {
     deleteBusiness,
 } from "../controllers/business.controller";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+    protect,
+    authorize
+} from "../middleware/auth.middleware";
 
 import {
     createBusinessValidation,
@@ -20,6 +23,7 @@ const router = Router();
 router.post(
     "/",
     protect,
+    authorize("CUSTOMER"),
     createBusinessValidation,
     validate,
     createBusiness
@@ -28,18 +32,21 @@ router.post(
 router.get(
     "/",
     protect,
+    authorize("CUSTOMER"),
     getBusiness
 );
 
 router.put(
     "/",
     protect,
+    authorize("CUSTOMER"),
     updateBusiness
 );
 
 router.delete(
     "/",
     protect,
+    authorize("CUSTOMER"),
     deleteBusiness
 );
 

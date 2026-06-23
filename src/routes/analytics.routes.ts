@@ -1,6 +1,9 @@
 import { Router } from "express";
 
-import { protect } from "../middleware/auth.middleware";
+import {
+  protect,
+  authorize
+} from "../middleware/auth.middleware";
 
 import {
   getDashboardAnalytics,
@@ -11,6 +14,7 @@ const router = Router();
 router.get(
   "/dashboard",
   protect,
+  authorize("CUSTOMER"),
   getDashboardAnalytics
 );
 
