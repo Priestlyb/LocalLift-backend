@@ -1,45 +1,49 @@
 import { Router } from "express";
 
 import {
-  getUsers,
-  getBusinesses,
-  getSubscriptions,
-  deleteUserByAdmin
-} from "../controllers/admin.controller";
+  register,
+  login,
+  getProfile,
+  logout,
+  deleteUser,
+  inviteStaff,
+} from "../controllers/auth.controller";
 
-import {
-  protect,
-  authorize,
-} from "../middleware/auth.middleware";
+import { protect, authorize } from "../middleware/auth.middleware";
 
 const router = Router();
 
-router.get(
-  "/users",
-  protect,
-  authorize("CUSTOMER"),
-  getUsers
-);
+/**
+ * =========================
+ * PUBLIC ROUTES
+ * =========================
+ */
+router.post("/register", register);
+router.post("/login", login);
 
-router.get(
-  "/businesses",
-  protect,
-  authorize("CUSTOMER"),
-  getBusinesses
-);
+/**
+ * =========================
+ * PROTECTED ROUTES
+ * =========================
+ * Any logged-in user
+ */
+router.post("/logout", protect, logout);
 
-router.get(
-  "/subscriptions",
-  protect,
-  authorize("CUSTOMER"),
-  getSubscriptions
-);
+router.get("/profile", protect, getProfile);
 
-router.delete(
-  "/users/:id",
+router.delete("/delete", protect, deleteUser);
+
+/**
+ * =========================
+ * BUSINESS OWNER ROUTES
+ * =========================
+ * Only CUSTOMER role can invite staff
+ */
+router.post(
+  "/staff/invite",
   protect,
   authorize("CUSTOMER"),
-  deleteUserByAdmin
+  inviteStaff
 );
 
 export default router;
