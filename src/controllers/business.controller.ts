@@ -3,7 +3,7 @@ import { Response } from "express";
 import Business from "../models/Business";
 import { AuthRequest } from "../middleware/auth.middleware";
 
-//Create Business
+// Create Business
 
 export const createBusiness = async (
     req: AuthRequest,
@@ -22,10 +22,48 @@ export const createBusiness = async (
             });
         }
 
+        const {
+            businessName,
+            category,
+            description,
+            targetAudience,
+            uniqueSellingPoint,
+            brandVoice,
+        } = req.body;
+
+        if (!businessName) {
+            return res.status(400).json({
+                message:
+                    "Business name is required",
+            });
+        }
+
+        if (!category) {
+            return res.status(400).json({
+                message:
+                    "Category is required",
+            });
+        }
+
         const business =
             await Business.create({
                 owner: req.userId,
-                ...req.body,
+
+                businessName,
+                category,
+                description,
+                targetAudience,
+                uniqueSellingPoint,
+                brandVoice,
+
+                phone: req.body.phone,
+                email: req.body.email,
+                address: req.body.address,
+                city: req.body.city,
+                state: req.body.state,
+                country: req.body.country,
+                website: req.body.website,
+                logo: req.body.logo,
             });
 
         return res.status(201).json({
@@ -40,8 +78,7 @@ export const createBusiness = async (
     }
 };
 
-
-//Get Business
+// Get Business
 
 export const getBusiness = async (
     req: AuthRequest,
@@ -71,7 +108,7 @@ export const getBusiness = async (
     }
 };
 
-//Update Business
+// Update Business
 
 export const updateBusiness = async (
     req: AuthRequest,
@@ -83,9 +120,12 @@ export const updateBusiness = async (
                 {
                     owner: req.userId,
                 },
-                req.body,
+                {
+                    ...req.body,
+                },
                 {
                     new: true,
+                    runValidators: true,
                 }
             );
 
@@ -107,7 +147,7 @@ export const updateBusiness = async (
     }
 };
 
-//Delete Business
+// Delete Business
 
 export const deleteBusiness = async (
     req: AuthRequest,

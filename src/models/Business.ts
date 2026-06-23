@@ -18,9 +18,25 @@ const businessSchema = new mongoose.Schema(
         category: {
             type: String,
             required: true,
+            trim: true,
         },
 
         description: {
+            type: String,
+            default: "",
+        },
+
+        targetAudience: {
+            type: String,
+            default: "",
+        },
+
+        uniqueSellingPoint: {
+            type: String,
+            default: "",
+        },
+
+        brandVoice: {
             type: String,
             default: "",
         },
