@@ -37,6 +37,16 @@ export const register = async (
             role: "CUSTOMER",
         });
 
+        /**
+         * Every new user starts on the FREE plan.
+         */
+        await Subscription.create({
+            user: user._id,
+            plan: "FREE",
+            status: "ACTIVE",
+            startsAt: new Date(),
+        });
+
         const token = generateToken(
             user._id.toString(),
             user.role

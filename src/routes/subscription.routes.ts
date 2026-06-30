@@ -2,12 +2,11 @@ import { Router } from "express";
 
 import {
     protect,
-    authorize
+    authorize,
 } from "../middleware/auth.middleware";
 
 import {
     getSubscription,
-    upgradeSubscription,
     cancelSubscription,
 } from "../controllers/subscription.controller";
 
@@ -18,13 +17,6 @@ router.get(
     protect,
     authorize("CUSTOMER"),
     getSubscription
-);
-
-router.post(
-    "/upgrade",
-    protect,
-    authorize("CUSTOMER"),
-    upgradeSubscription
 );
 
 router.post(

@@ -1,5 +1,14 @@
-import dotenv from "dotenv";
-dotenv.config();
+import "./config/env";
+
+console.log(
+  "SERVER PAYSTACK:",
+  process.env.PAYSTACK_SECRET_KEY
+);
+
+console.log(
+  "SERVER KORA:",
+  process.env.KORA_SECRET_KEY
+);
 
 import app from "./app";
 import { connectDB } from "./config/database";

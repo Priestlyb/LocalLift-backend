@@ -3,13 +3,11 @@ import { Request, Response } from "express";
 
 import User from "../models/User";
 import Payment, { IPayment } from "../models/Payment";
-import Subscription from "../models/Subscription";
 
 import { AuthRequest } from "../middleware/auth.middleware";
-
 import { PLANS } from "../constants/plans";
 
-import { PaymentService } from "../services/payments/payment.service";
+import { PaymentService } from "../services/payment/payment.service";
 
 import {
     PaymentProvider,
@@ -17,100 +15,171 @@ import {
 } from "../types/payment.types";
 
 import WebhookEvent from "../models/WebhookEvent";
-import { paymentQueue } from "../queues/payment.queue";
+import { addPaymentJob } from "../queues/payment.queue";
 
 /**
- * =========================
  * INITIALIZE PAYMENT
- * =========================
  */
 export const initializePayment = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
-        const { provider, plan }: {
+        const {
+            provider,
+            plan,
+        }: {
             provider: PaymentProvider;
             plan: PaymentPlan;
         } = req.body;
 
         if (!provider || !plan) {
             return res.status(400).json({
-                message: "Provider and plan are required",
+                message:
+                    "Provider and plan are required",
             });
         }
 
-        if (!PaymentService.isSupportedProvider(provider)) {
+        if (
+            !PaymentService.isSupportedProvider(
+                provider
+            )
+        ) {
             return res.status(400).json({
-                message: "Unsupported payment provider",
+                message:
+                    "Unsupported payment provider",
             });
         }
 
         if (plan === "FREE") {
             return res.status(400).json({
-                message: "FREE plan does not require payment",
+                message:
+                    "FREE plan does not require payment",
             });
         }
 
-        const user = await User.findById(req.userId);
+        const user =
+            await User.findById(
+                req.userId
+            );
 
         if (!user) {
             return res.status(404).json({
-                message: "User not found",
+                message:
+                    "User not found",
             });
         }
 
-        const planConfig = PLANS[plan as keyof typeof PLANS];
+        const planConfig =
+            PLANS[
+            plan as keyof typeof PLANS
+            ];
 
         if (!planConfig) {
             return res.status(400).json({
-                message: "Invalid plan",
+                message:
+                    "Invalid plan",
             });
         }
 
-        const reference = crypto.randomUUID();
+        /**
+         * Prevent duplicate pending payments
+         * for the same provider and plan.
+         */
+        const existingPayment =
+            await Payment.findOne({
+                user: req.userId,
+                provider,
+                plan,
+                status: "PENDING",
+            });
+
+        const paymentProvider =
+            PaymentService.getProvider(
+                provider
+            );
+
+        if (existingPayment) {
+            const result =
+                await paymentProvider.initializePayment(
+                    {
+                        email: user.email,
+                        amount:
+                            planConfig.price,
+                        reference:
+                            existingPayment.reference,
+                        metadata: {
+                            userId:
+                                req.userId,
+                            plan,
+                        },
+                    }
+                );
+
+            return res.status(200).json({
+                success: true,
+                message:
+                    "Existing pending payment found.",
+                provider,
+                plan,
+                reference:
+                    existingPayment.reference,
+                authorizationUrl:
+                    result.authorizationUrl,
+            });
+        }
+
+        const reference =
+            crypto.randomUUID();
 
         await Payment.create({
             user: req.userId,
             provider,
             reference,
             plan,
-            amount: planConfig.price,
+            amount:
+                planConfig.price,
             status: "PENDING",
         });
 
-        const paymentProvider = PaymentService.getProvider(provider);
-
-        const result = await paymentProvider.initializePayment({
-            email: user.email,
-            amount: planConfig.price,
-            reference,
-            metadata: {
-                userId: req.userId,
-                plan,
-            },
-        });
+        const result =
+            await paymentProvider.initializePayment(
+                {
+                    email: user.email,
+                    amount:
+                        planConfig.price,
+                    reference,
+                    metadata: {
+                        userId:
+                            req.userId,
+                        plan,
+                    },
+                }
+            );
 
         return res.status(200).json({
             success: true,
             provider,
             plan,
             reference,
-            authorizationUrl: result.authorizationUrl,
+            authorizationUrl:
+                result.authorizationUrl,
         });
     } catch (error) {
-        console.error("Initialize Payment Error:", error);
+        console.error(
+            "Initialize Payment Error:",
+            error
+        );
 
         return res.status(500).json({
-            message: "Failed to initialize payment",
+            message:
+                "Failed to initialize payment",
         });
     }
 };
 
 /**
- * =========================
- * VERIFY PAYMENT (MANUAL SYNC)
- * =========================
+ * VERIFY PAYMENT
  */
 export const verifyPayment = async (
     req: AuthRequest,
@@ -119,7 +188,11 @@ export const verifyPayment = async (
     try {
         const reference = String(req.params.reference);
 
-        const payment = await Payment.findOne({ reference });
+        const payment =
+            await Payment.findOne({
+                reference,
+                user: req.userId,
+            });
 
         if (!payment) {
             return res.status(404).json({
@@ -127,25 +200,22 @@ export const verifyPayment = async (
             });
         }
 
-        const provider = PaymentService.getProvider(payment.provider);
+        const provider =
+            PaymentService.getProvider(payment.provider);
 
-        const verification = await provider.verifyPayment(reference);
+        const verification =
+            await provider.verifyPayment(reference);
 
-        if (verification.success && payment.status !== "SUCCESS") {
+        if (
+            verification.success &&
+            payment.status !== "SUCCESS"
+        ) {
             payment.status = "SUCCESS";
-            payment.paidAt = new Date(verification.paidAt || Date.now());
+            payment.paidAt = new Date(
+                verification.paidAt || Date.now()
+            );
 
             await payment.save();
-
-            await Subscription.findOneAndUpdate(
-                { user: payment.user },
-                {
-                    plan: payment.plan,
-                    status: "ACTIVE",
-                    startsAt: new Date(),
-                },
-                { upsert: true, new: true }
-            );
         }
 
         return res.status(200).json({
@@ -163,50 +233,15 @@ export const verifyPayment = async (
 };
 
 /**
- * =========================
- * SUBSCRIPTION UPGRADE (SAFE + IDEMPOTENT)
- * =========================
- */
-export const upgradeSubscription = async (payment: IPayment) => {
-    const now = new Date();
-
-    const existing = await Subscription.findOne({
-        user: payment.user,
-    });
-
-    let startsAt = now;
-    let expiresAt = new Date();
-
-    if (existing?.expiresAt && existing.expiresAt > now) {
-        startsAt = existing.startsAt || now;
-        expiresAt = new Date(existing.expiresAt);
-    }
-
-    expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-    await Subscription.findOneAndUpdate(
-        { user: payment.user },
-        {
-            user: payment.user,
-            plan: payment.plan,
-            status: "ACTIVE",
-            startsAt,
-            expiresAt,
-            lastPaymentReference: payment.reference,
-            updatedAt: now,
-        },
-        { new: true, upsert: true }
-    );
-};
-
-/**
- * =========================
  * KORA WEBHOOK
- * =========================
  */
-export const koraWebhook = async (req: Request, res: Response) => {
+export const koraWebhook = async (
+    req: Request,
+    res: Response
+) => {
     try {
-        const provider = PaymentService.getProvider("KORA");
+        const provider =
+            PaymentService.getProvider("KORA");
 
         const rawBody = req.body.toString("utf8");
 
@@ -219,7 +254,6 @@ export const koraWebhook = async (req: Request, res: Response) => {
             return res.sendStatus(200);
         }
 
-        // 🔒 1. IDEMPOTENCY CHECK (EVENT STORE)
         const exists = await WebhookEvent.findOne({
             provider: "KORA",
             reference: payload.reference,
@@ -236,16 +270,8 @@ export const koraWebhook = async (req: Request, res: Response) => {
             processed: false,
         });
 
-        // ⚡ 2. PUSH TO QUEUE
-        await paymentQueue.add(
-            "process-payment",
-            {
-                reference: payload.reference,
-            },
-            {
-                attempts: 5,
-                backoff: { type: "exponential", delay: 2000 },
-            }
+        await addPaymentJob(
+            payload.reference
         );
 
         return res.sendStatus(200);
@@ -256,13 +282,15 @@ export const koraWebhook = async (req: Request, res: Response) => {
 };
 
 /**
- * =========================
  * PAYSTACK WEBHOOK
- * =========================
  */
-export const paystackWebhook = async (req: Request, res: Response) => {
+export const paystackWebhook = async (
+    req: Request,
+    res: Response
+) => {
     try {
-        const provider = PaymentService.getProvider("PAYSTACK");
+        const provider =
+            PaymentService.getProvider("PAYSTACK");
 
         const rawBody = req.body.toString("utf8");
 
@@ -275,7 +303,6 @@ export const paystackWebhook = async (req: Request, res: Response) => {
             return res.sendStatus(200);
         }
 
-        // 🔒 EVENT STORE CHECK
         const exists = await WebhookEvent.findOne({
             provider: "PAYSTACK",
             reference: payload.reference,
@@ -292,16 +319,8 @@ export const paystackWebhook = async (req: Request, res: Response) => {
             processed: false,
         });
 
-        // ⚡ PUSH TO QUEUE
-        await paymentQueue.add(
-            "process-payment",
-            {
-                reference: payload.reference,
-            },
-            {
-                attempts: 5,
-                backoff: { type: "exponential", delay: 2000 },
-            }
+        await addPaymentJob(
+            payload.reference
         );
 
         return res.sendStatus(200);
@@ -312,9 +331,7 @@ export const paystackWebhook = async (req: Request, res: Response) => {
 };
 
 /**
- * =========================
  * PAYMENT HISTORY
- * =========================
  */
 export const getPaymentHistory = async (
     req: AuthRequest,

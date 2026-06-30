@@ -5,6 +5,7 @@ import {
     verifyPayment,
     koraWebhook,
     paystackWebhook,
+    getPaymentHistory,
 } from "../controllers/payment.controller";
 
 import {
@@ -15,11 +16,6 @@ import { validateInitializePayment } from "../validators/payment.validator";
 
 const router = Router();
 
-/**
- * User Payment Routes
- */
-
-// Initialize payment
 router.post(
     "/initialize",
     protect,
@@ -28,7 +24,6 @@ router.post(
     initializePayment
 );
 
-// Verify payment
 router.get(
     "/verify/:reference",
     protect,
@@ -36,23 +31,21 @@ router.get(
     verifyPayment
 );
 
-/**
- * Webhook Routes
- *
- * Do NOT protect these routes.
- * They must be accessible by Kora and Paystack.
- */
-
-// Kora webhook
 router.post(
     "/webhook/kora",
     koraWebhook
 );
 
-// Paystack webhook
 router.post(
     "/webhook/paystack",
     paystackWebhook
+);
+
+router.get(
+    "/history",
+    protect,
+    authorize("CUSTOMER"),
+    getPaymentHistory
 );
 
 export default router;

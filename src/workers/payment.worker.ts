@@ -1,55 +1,114 @@
-import { Worker } from "bullmq";
-import { redis } from "../config/redis";
-
 import Payment from "../models/Payment";
-import Subscription from "../models/Subscription";
+import WebhookEvent from "../models/WebhookEvent";
 
-export const paymentWorker = new Worker(
-    "payment-events",
-    async (job) => {
-        const { reference } = job.data;
+import { PaymentService } from "../services/payment/payment.service";
+import { applySubscriptionUpgrade } from "../services/subscription/subscription.service";
 
-        const payment = await Payment.findOne({ reference });
+export const processPaymentJob = async (job: any) => {
+    const { reference } = job.data;
 
-        if (!payment) return;
-        if (payment.status === "SUCCESS") return;
+    console.log(
+        `[PAYMENT JOB] Processing payment ${reference}`
+    );
 
+    try {
+        const payment = await Payment.findOne({
+            reference,
+        });
+
+        if (!payment) {
+            console.log(
+                `[PAYMENT JOB] Payment not found: ${reference}`
+            );
+
+            return;
+        }
+
+        const webhookEvent =
+            await WebhookEvent.findOne({
+                provider: payment.provider,
+                reference,
+                processed: false,
+            });
+
+        if (!webhookEvent) {
+            console.log(
+                `[PAYMENT JOB] Already processed: ${reference}`
+            );
+
+            return;
+        }
+
+        
+        
+        const provider =
+            PaymentService.getProvider(
+                payment.provider
+            );
+
+        const verification =
+            await provider.verifyPayment(
+                reference
+            );
+
+        if (!verification.success) {
+            console.log(
+                `[PAYMENT JOB] Verification failed: ${reference}`
+            );
+
+            return;
+        }
+
+        
+        
+        if (
+            verification.status &&
+            verification.status
+                .toLowerCase()
+                .trim() !== "success"
+        ) {
+            console.log(
+                `[PAYMENT JOB] Payment not successful: ${reference}`
+            );
+
+            return;
+        }
+
+        
         payment.status = "SUCCESS";
-        payment.paidAt = new Date();
+
+        payment.paidAt = new Date(
+            verification.paidAt ||
+            Date.now()
+        );
 
         await payment.save();
 
-        const existing = await Subscription.findOne({
-            user: payment.user,
-        });
-
-        const now = new Date();
-
-        let startsAt = now;
-        let expiresAt = new Date();
-
-        if (existing?.expiresAt && existing.expiresAt > now) {
-            startsAt = existing.startsAt || now;
-            expiresAt = new Date(existing.expiresAt);
-        }
-
-        expiresAt.setMonth(expiresAt.getMonth() + 1);
-
-        await Subscription.findOneAndUpdate(
-            { user: payment.user },
-            {
-                user: payment.user,
-                plan: payment.plan,
-                status: "ACTIVE",
-                startsAt,
-                expiresAt,
-                lastPaymentReference: payment.reference,
-                updatedAt: now,
-            },
-            { upsert: true, new: true }
+        console.log(
+            `[PAYMENT JOB] Payment marked SUCCESS: ${reference}`
         );
-    },
-    {
-        connection: redis,
+
+        
+        await applySubscriptionUpgrade(
+            payment
+        );
+
+        console.log(
+            `[PAYMENT JOB] Subscription upgraded: ${reference}`
+        );
+
+        webhookEvent.processed = true;
+
+        await webhookEvent.save();
+
+        console.log(
+            `[PAYMENT JOB] Completed: ${reference}`
+        );
+    } catch (error) {
+        console.error(
+            `[PAYMENT JOB] Failed: ${reference}`,
+            error
+        );
+        throw error;
     }
-);
+};

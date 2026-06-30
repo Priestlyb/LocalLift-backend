@@ -5,6 +5,8 @@ import {
 } from "express";
 import jwt from "jsonwebtoken";
 
+import User from "../models/User";
+
 export interface AuthRequest
   extends Request {
   userId?: string;
@@ -22,7 +24,7 @@ interface JwtPayload {
     | "CUSTOMER_STAFF";
 }
 
-export const protect = (
+export const protect = async (
   req: AuthRequest,
   res: Response,
   next: NextFunction
@@ -37,12 +39,24 @@ export const protect = (
       });
     }
 
+    if (
+      !authHeader.startsWith(
+        "Bearer "
+      )
+    ) {
+      return res.status(401).json({
+        message:
+          "Invalid token format",
+      });
+    }
+
     const token =
       authHeader.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({
-        message: "Invalid token format",
+        message:
+          "Invalid token format",
       });
     }
 
@@ -51,8 +65,22 @@ export const protect = (
       process.env.JWT_SECRET!
     ) as JwtPayload;
 
-    req.userId = decoded.userId;
-    req.role = decoded.role;
+    const user =
+      await User.findById(
+        decoded.userId
+      );
+
+    if (!user) {
+      return res.status(401).json({
+        message:
+          "User account no longer exists",
+      });
+    }
+
+    req.userId =
+      user._id.toString();
+
+    req.role = user.role;
 
     next();
   } catch (error) {

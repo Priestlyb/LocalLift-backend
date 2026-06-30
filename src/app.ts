@@ -3,42 +3,59 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 
+/**
+ * Route modules
+ */
 import authRoutes from "./routes/auth.routes";
+import adminRoutes from "./routes/admin.routes";
 import businessRoutes from "./routes/business.routes";
 import subscriptionRoutes from "./routes/subscription.routes";
+import paymentRoutes from "./routes/payment.routes";
 import contentRoutes from "./routes/content.routes";
 import analyticsRoutes from "./routes/analytics.routes";
-import paymentRoutes from "./routes/payment.routes";
-import adminRoutes from "./routes/admin.routes";
+import schedulerRoutes from "./routes/scheduler.routes";
+import teamRoutes from "./routes/team.routes";
+
+/**
+ * Background workers
+ */
+import "./workers/ai.worker";
+
+/**
+ * Background jobs
+ */
+import "./jobs/cleanup.job";
+import "./jobs/retryVideo.job";
+import "./jobs/analytics.job";
 
 const app = express();
 
 /**
- * =========================
- * GLOBAL MIDDLEWARE
- * =========================
+ * Global middleware
  */
 app.use(cors());
+
 app.use(helmet());
+
 app.use(morgan("dev"));
 
 /**
- * Webhook MUST come before express.json()
+ * Payment webhook must receive the raw body.
  */
 app.use(
   "/api/v1/payments/webhook",
-  express.raw({ type: "application/json" })
+  express.raw({
+    type: "application/json",
+  })
 );
 
 /**
- * JSON parser
+ * Parse JSON for every other route.
  */
 app.use(express.json());
 
 /**
- * =========================
- * HEALTH CHECK
- * =========================
+ * Health check
  */
 app.get("/", (_, res) => {
   res.json({
@@ -50,78 +67,156 @@ app.get("/", (_, res) => {
 const API_PREFIX = "/api/v1";
 
 /**
- * =========================
- * ROUTE REGISTRATION SAFETY WRAPPER
- * =========================
- * This prevents silent route failure (VERY IMPORTANT)
+ * Safely register routes.
  */
-const loadRoute = (path: string, route: any) => {
+const loadRoute = (
+  path: string,
+  router: express.Router
+) => {
   try {
-    app.use(path, route);
-    console.log(`✅ Route loaded: ${path}`);
-  } catch (err) {
-    console.error(`❌ Failed loading route: ${path}`, err);
+    app.use(path, router);
+
+    console.log(
+      `✅ Route loaded: ${path}`
+    );
+  } catch (error) {
+    console.error(
+      `❌ Failed loading route: ${path}`,
+      error
+    );
   }
 };
 
 /**
- * =========================
- * ROUTES
- * =========================
+ * API Routes
  */
-loadRoute(`${API_PREFIX}/auth`, authRoutes);
-loadRoute(`${API_PREFIX}/admin`, adminRoutes);
-loadRoute(`${API_PREFIX}/business`, businessRoutes);
-loadRoute(`${API_PREFIX}/subscription`, subscriptionRoutes);
-loadRoute(`${API_PREFIX}/analytics`, analyticsRoutes);
+loadRoute(
+  `${API_PREFIX}/auth`,
+  authRoutes
+);
 
-// optional routes (commented safely)
-//loadRoute(`${API_PREFIX}/content`, contentRoutes);
-//loadRoute(`${API_PREFIX}/payments`, paymentRoutes);
+loadRoute(
+  `${API_PREFIX}/admin`,
+  adminRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/business`,
+  businessRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/subscription`,
+  subscriptionRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/payments`,
+  paymentRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/content`,
+  contentRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/analytics`,
+  analyticsRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/scheduler`,
+  schedulerRoutes
+);
+
+loadRoute(
+  `${API_PREFIX}/team`,
+  teamRoutes
+);
 
 /**
- * =========================
- * DEBUG ROUTES (DEV ONLY)
- * =========================
+ * Debug endpoint
  */
-if (process.env.NODE_ENV !== "production") {
-  app.get("/_debug/routes", (_, res) => {
-    const routes: any[] = [];
+if (
+  process.env.NODE_ENV !==
+  "production"
+) {
+  app.get(
+    "/_debug/routes",
+    (_, res) => {
+      const routes: any[] = [];
 
-    app._router.stack.forEach((middleware: any) => {
-      if (middleware.route) {
-        routes.push({
-          method: Object.keys(middleware.route.methods)[0].toUpperCase(),
-          path: middleware.route.path,
-        });
-      } else if (middleware.name === "router") {
-        middleware.handle.stack.forEach((handler: any) => {
-          if (handler.route) {
+      const stack =
+        (app as any)._router?.stack ??
+        [];
+
+      stack.forEach(
+        (middleware: any) => {
+          if (
+            middleware.route
+          ) {
             routes.push({
-              method: Object.keys(handler.route.methods)[0].toUpperCase(),
-              path: handler.route.path,
+              method: Object.keys(
+                middleware.route
+                  .methods
+              )[0].toUpperCase(),
+
+              path: middleware.route
+                .path,
             });
+
+            return;
           }
-        });
-      }
-    });
 
-    res.json(routes);
-  });
+          if (
+            middleware.name ===
+            "router"
+          ) {
+            middleware.handle.stack.forEach(
+              (
+                handler: any
+              ) => {
+                if (
+                  handler.route
+                ) {
+                  routes.push({
+                    method:
+                      Object.keys(
+                        handler
+                          .route
+                          .methods
+                      )[0].toUpperCase(),
 
-  console.log("\n📌 ROUTES LOADED SUCCESSFULLY");
+                    path: handler
+                      .route.path,
+                  });
+                }
+              }
+            );
+          }
+        }
+      );
+
+      res.json(routes);
+    }
+  );
+
+  console.log(
+    "\n📌 ROUTES LOADED SUCCESSFULLY\n"
+  );
 }
 
 /**
- * =========================
- * 404 HANDLER (FINAL SAFETY NET)
- * =========================
+ * 404 handler
  */
 app.use((req, res) => {
   res.status(404).json({
     success: false,
+
     message: `Route not found: ${req.method} ${req.originalUrl}`,
-    hint: "Check API prefix (/api/v1) and route registration",
+
+    hint: "Check API prefix (/api/v1) and route registration.",
   });
 });
 

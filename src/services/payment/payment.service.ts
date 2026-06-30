@@ -8,9 +8,6 @@ import {
 } from "../../types/payment.types";
 
 export class PaymentService {
-    /**
-     * Returns the appropriate payment provider
-     */
     static getProvider(
         provider: PaymentProviderType
     ): PaymentProvider {
@@ -28,9 +25,7 @@ export class PaymentService {
         }
     }
 
-    /**
-     * Returns all supported providers
-     */
+    
     static getSupportedProviders(): PaymentProviderType[] {
         return [
             "KORA",
@@ -38,9 +33,7 @@ export class PaymentService {
         ];
     }
 
-    /**
-     * Check if provider is supported
-     */
+    
     static isSupportedProvider(
         provider: string
     ): provider is PaymentProviderType {

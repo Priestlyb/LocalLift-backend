@@ -1,53 +1,100 @@
 import { Router } from "express";
 
-import {
-  protect,
-  authorize
-} from "../middleware/auth.middleware";
+import contentController from "../controllers/content.controller";
 
 import {
-  generateContent,
-  getHistory,
-  getUsage,
-  getContentById,
-  deleteContent,
-} from "../controllers/content.controller";
+  protect,
+  authorize,
+} from "../middleware/auth.middleware";
+
+import requireSubscription from "../middleware/requireSubscription.middleware";
 
 const router = Router();
 
+/**
+ * Generate AI content.
+ * Requires an active subscription.
+ */
 router.post(
   "/generate",
   protect,
-  authorize("CUSTOMER"),
-  generateContent
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  requireSubscription,
+  contentController.generate
 );
 
+/**
+ * Get all generated content.
+ */
 router.get(
   "/history",
   protect,
-  authorize("CUSTOMER"),
-  getHistory
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  contentController.getHistory
 );
 
+/**
+ * Get paginated content history.
+ */
 router.get(
-  "/usage",
+  "/history/page",
   protect,
-  authorize("CUSTOMER"),
-  getUsage
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  contentController.getHistoryPage
 );
 
+/**
+ * Get recently generated content.
+ */
+router.get(
+  "/recent",
+  protect,
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  contentController.recent
+);
+
+/**
+ * Get a single content item.
+ */
 router.get(
   "/:id",
   protect,
-  authorize("CUSTOMER"),
-  getContentById
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  contentController.getContent
 );
 
+/**
+ * Delete a content item.
+ */
 router.delete(
   "/:id",
   protect,
-  authorize("CUSTOMER"),
-  deleteContent
+  authorize(
+    "ADMIN",
+    "CUSTOMER",
+    "CUSTOMER_STAFF"
+  ),
+  contentController.deleteContent
 );
 
 export default router;

@@ -1,4 +1,5 @@
 // routes/admin.routes.ts
+
 import { Router } from "express";
 
 import {
@@ -15,31 +16,58 @@ import {
 
 const router = Router();
 
+/**
+ * All admin routes require:
+ * - Authentication
+ * - ADMIN role
+ */
+router.use(
+  protect,
+  authorize("ADMIN")
+);
+
+/**
+ * Get paginated users.
+ *
+ * Query Params:
+ * - page (optional)
+ * - limit (optional)
+ */
 router.get(
   "/users",
-  protect,
-  authorize("ADMIN"),
   getUsers
 );
 
+/**
+ * Get paginated businesses.
+ *
+ * Query Params:
+ * - page (optional)
+ * - limit (optional)
+ */
 router.get(
   "/businesses",
-  protect,
-  authorize("ADMIN"),
   getBusinesses
 );
 
+/**
+ * Get paginated subscriptions.
+ *
+ * Query Params:
+ * - page (optional)
+ * - limit (optional)
+ */
 router.get(
   "/subscriptions",
-  protect,
-  authorize("ADMIN"),
   getSubscriptions
 );
 
+/**
+ * Permanently delete a user and
+ * associated records.
+ */
 router.delete(
   "/users/:id",
-  protect,
-  authorize("ADMIN"),
   deleteUserByAdmin
 );
 

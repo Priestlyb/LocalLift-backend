@@ -4,23 +4,22 @@ import Subscription from "../models/Subscription";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { PLANS } from "../constants/plans";
 
-
+/**
+ * GET SUBSCRIPTION
+ */
 export const getSubscription = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
-        let subscription =
-            await Subscription.findOne({
-                user: req.userId,
-            });
+        let subscription = await Subscription.findOne({
+            user: req.userId,
+        });
 
         if (!subscription) {
-            subscription =
-                await Subscription.create({
-                    user: req.userId,
-                    plan: "FREE",
-                });
+            return res.status(404).json({
+                message: "Subscription not found",
+            });
         }
 
         return res.json({
@@ -31,7 +30,7 @@ export const getSubscription = async (
                 ],
         });
     } catch (error) {
-        console.error(error);
+        console.error("Get Subscription Error:", error);
 
         return res.status(500).json({
             message: "Server Error",
@@ -39,91 +38,74 @@ export const getSubscription = async (
     }
 };
 
-
-export const upgradeSubscription = async (
-    req: AuthRequest,
-    res: Response
-) => {
-    try {
-        const { plan } = req.body;
-
-        if (
-            !["FREE", "STARTER", "GROWTH", "PRO"].includes(
-                plan
-            )
-        ) {
-            return res.status(400).json({
-                message: "Invalid plan",
-            });
-        }
-
-        const expiresAt = new Date();
-
-        expiresAt.setMonth(
-            expiresAt.getMonth() + 1
-        );
-
-        const subscription =
-            await Subscription.findOneAndUpdate(
-                {
-                    user: req.userId,
-                },
-                {
-                    plan,
-                    status: "ACTIVE",
-                    startsAt: new Date(),
-                    expiresAt,
-                },
-                {
-                    upsert: true,
-                    new: true,
-                }
-            );
-
-        return res.json({
-            message:
-                "Subscription updated successfully",
-            subscription,
-        });
-    } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
-    }
-};
-
-
+/**
+ * CANCEL SUBSCRIPTION
+ */
 export const cancelSubscription = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
         const subscription =
-            await Subscription.findOneAndUpdate(
-                {
-                    user: req.userId,
-                },
-                {
-                    status: "CANCELLED",
-                },
-                {
-                    new: true,
-                }
-            );
+            await Subscription.findOne({
+                user: req.userId,
+            });
 
-        return res.json({
+        if (!subscription) {
+            return res.status(404).json({
+                message:
+                    "Subscription not found",
+            });
+        }
+
+        if (
+            subscription.plan ===
+            "FREE"
+        ) {
+            return res.status(400).json({
+                message:
+                    "Free subscriptions cannot be cancelled.",
+            });
+        }
+
+        if (
+            subscription.status ===
+            "CANCELLED"
+        ) {
+            return res.status(400).json({
+                message:
+                    "Subscription is already cancelled.",
+                subscription,
+            });
+        }
+
+        subscription.status =
+            "CANCELLED";
+
+        subscription.cancelledAt =
+            new Date();
+
+        subscription.autoRenew =
+            false;
+
+        await subscription.save();
+
+        return res.status(200).json({
+            success: true,
             message:
-                "Subscription cancelled",
+                "Subscription cancelled successfully.",
             subscription,
         });
     } catch (error) {
-        console.error(error);
+        console.error(
+            "Cancel Subscription Error:",
+            error
+        );
 
         return res.status(500).json({
-            message: "Server Error",
+            success: false,
+            message:
+                "Server Error",
         });
     }
 };
-

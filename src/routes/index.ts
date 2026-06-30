@@ -4,7 +4,7 @@ import authRoutes from "./auth.routes";
 import adminRoutes from "./admin.routes";
 import businessRoutes from "./business.routes";
 import subscriptionRoutes from "./subscription.routes";
-import analyticsRoutes from "./analytics.routes";
+import analyticsRoutes from "./dashboardAnalytics.routes";
 
 export function registerRoutes(app: Express) {
   app.use("/api/v1/auth", authRoutes);

@@ -1,222 +1,233 @@
-import { Response } from "express";
-
-import Content from "../models/Content";
-import Business from "../models/Business";
-import Subscription from "../models/Subscription";
+import {
+  Response,
+  NextFunction,
+} from "express";
 
 import { AuthRequest } from "../middleware/auth.middleware";
-import { getOrCreateUsage } from "../services/usage.service";
-import { PLANS } from "../constants/plans";
-import { generateAIContent } from "../services/ai.service";
 
-export const generateContent = async (
+import generationService from "../services/ai-tools/generation.service";
+import contentService from "../services/content/content.service";
+
+class ContentController {
+  /**
+   * Generate AI content.
+   */
+  async generate(
     req: AuthRequest,
-    res: Response
-) => {
+    res: Response,
+    next: NextFunction
+  ) {
     try {
-        const {
-            type,
-            productName,
-            details,
-        } = req.body;
+      const {
+        type,
+        businessId,
+        details,
+        productName,
+        platform,
+        tone,
+        audience,
+      } = req.body;
 
-        const business =
-            await Business.findOne({
-                owner: req.userId,
-            });
-
-        if (!business) {
-            return res.status(404).json({
-                message: "Business not found",
-            });
-        }
-
-        let subscription =
-            await Subscription.findOne({
-                user: req.userId,
-            });
-
-        if (!subscription) {
-            subscription =
-                await Subscription.create({
-                    user: req.userId,
-                    plan: "FREE",
-                });
-        }
-
-        const usage =
-            await getOrCreateUsage(
-                req.userId!
-            );
-
-        const limit =
-            PLANS[
-                subscription.plan as keyof typeof PLANS
-            ].monthlyGenerations;
-
-        if (
-            usage.generationsUsed >= limit
-        ) {
-            return res.status(403).json({
-                message:
-                    "Monthly generation limit reached",
-            });
-        }
-
-        const generatedContent =
-            await generateAIContent(
-                type,
-                business.businessName,
-                business.category,
-                details,
-                productName
-            );
-
-        const content =
-            await Content.create({
-                user: req.userId,
-                business: business._id,
-                type,
-                prompt: details,
-                generatedContent,
-            });
-
-        usage.generationsUsed += 1;
-        await usage.save();
-
-        return res.json({
-            content,
-            remaining:
-                limit -
-                usage.generationsUsed,
+      if (!type) {
+        return res.status(400).json({
+          success: false,
+          message: "Content type is required.",
         });
+      }
+
+      if (!businessId) {
+        return res.status(400).json({
+          success: false,
+          message: "Business ID is required.",
+        });
+      }
+
+      if (!details) {
+        return res.status(400).json({
+          success: false,
+          message: "Content details are required.",
+        });
+      }
+
+      const content =
+        await generationService.generate({
+          userId: req.userId!,
+          type,
+          businessId,
+          details,
+          productName,
+          platform,
+          tone,
+          audience,
+        });
+
+      return res.status(201).json({
+        success: true,
+        message:
+          "Content generated successfully.",
+        data: content,
+      });
     } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
+      next(error);
     }
-};
+  }
 
-export const getContentById = async (
+  /**
+   * Returns one content item.
+   */
+  async getContent(
     req: AuthRequest,
-    res: Response
-) => {
+    res: Response,
+    next: NextFunction
+  ) {
     try {
-        const content = await Content.findOne({
-            _id: req.params.id,
-            user: req.userId,
-        });
+      const content =
+        await contentService.getUserContent(
+          req.userId!,
+          req.params.id as string
+        );
 
-        if (!content) {
-            return res.status(404).json({
-                message: "Content not found",
-            });
-        }
-
-        return res.json({
-            content,
+      if (!content) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Content not found.",
         });
+      }
+
+      return res.json({
+        success: true,
+        data: content,
+      });
     } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
+      next(error);
     }
-};
+  }
 
-export const getHistory = async (
+  /**
+   * Returns the user's generation history.
+   */
+  async getHistory(
     req: AuthRequest,
-    res: Response
-) => {
+    res: Response,
+    next: NextFunction
+  ) {
     try {
-        const history =
-            await Content.find({
-                user: req.userId,
-            }).sort({
-                createdAt: -1,
-            });
+      const history =
+        await contentService.getHistory(
+          req.userId!
+        );
 
-        return res.json({
-            history,
-        });
+      return res.json({
+        success: true,
+        data: history,
+      });
     } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
+      next(error);
     }
-};
+  }
 
-
-export const getUsage = async (
+  /**
+   * Returns paginated history.
+   */
+  async getHistoryPage(
     req: AuthRequest,
-    res: Response
-) => {
+    res: Response,
+    next: NextFunction
+  ) {
     try {
-        const subscription =
-            await Subscription.findOne({
-                user: req.userId,
-            });
+      const page = Math.max(
+        Number(req.query.page ?? 1),
+        1
+      );
 
-        const usage =
-            await getOrCreateUsage(
-                req.userId!
-            );
+      const limit = Math.min(
+        Math.max(
+          Number(req.query.limit ?? 20),
+          1
+        ),
+        100
+      );
 
-        const plan =
-            subscription?.plan || "FREE";
+      const result =
+        await contentService.getHistoryPage(
+          req.userId!,
+          page,
+          limit
+        );
 
-        const limit =
-            PLANS[
-                plan as keyof typeof PLANS
-            ].monthlyGenerations;
-
-        return res.json({
-            plan,
-            used:
-                usage.generationsUsed,
-            remaining:
-                limit -
-                usage.generationsUsed,
-            limit,
-        });
+      return res.json({
+        success: true,
+        data: result,
+      });
     } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
+      next(error);
     }
-};
+  }
 
-export const deleteContent = async (
+  /**
+   * Deletes a content item.
+   */
+  async deleteContent(
     req: AuthRequest,
-    res: Response
-) => {
+    res: Response,
+    next: NextFunction
+  ) {
     try {
-        const content = await Content.findOneAndDelete({
-            _id: req.params.id,
-            user: req.userId,
-        });
+      const content =
+        await contentService.delete(
+          req.userId!,
+          req.params.id as string
+        );
 
-        if (!content) {
-            return res.status(404).json({
-                message: "Content not found",
-            });
-        }
-
-        return res.json({
-            message: "Content deleted successfully",
+      if (!content) {
+        return res.status(404).json({
+          success: false,
+          message:
+            "Content not found.",
         });
+      }
+
+      return res.json({
+        success: true,
+        message:
+          "Content deleted successfully.",
+      });
     } catch (error) {
-        console.error(error);
-
-        return res.status(500).json({
-            message: "Server Error",
-        });
+      next(error);
     }
-};
+  }
+
+  /**
+   * Returns recent content.
+   */
+  async recent(
+    req: AuthRequest,
+    res: Response,
+    next: NextFunction
+  ) {
+    try {
+      const limit = Math.min(
+        Math.max(
+          Number(req.query.limit ?? 10),
+          1
+        ),
+        100
+      );
+
+      const recent =
+        await contentService.getRecent(
+          limit
+        );
+
+      return res.json({
+        success: true,
+        data: recent,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+}
+
+export default new ContentController();
