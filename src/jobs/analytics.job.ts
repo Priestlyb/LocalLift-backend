@@ -1,6 +1,7 @@
 import cron from "node-cron";
 
 import Analytics from "../models/Analytics";
+import Business from "../models/Business";
 
 import reportService from "../services/analytics/report.service";
 import insightService from "../services/analytics/insight.service";
@@ -31,15 +32,39 @@ export const analyticsJob = () => {
 
         for (const businessId of businesses) {
           try {
+            /**
+             * Retrieve the business owner so the
+             * analytics services can perform
+             * ownership validation.
+             */
+            const business =
+              await Business.findById(
+                businessId
+              ).select("owner");
+
+            if (!business) {
+              console.warn(
+                `[ANALYTICS JOB] Business ${businessId} not found.`
+              );
+
+              continue;
+            }
+
+            const ownerId =
+              business.owner.toString();
+
             await reportService.getWeeklyReport(
+              ownerId,
               businessId.toString()
             );
 
             await reportService.getMonthlyReport(
+              ownerId,
               businessId.toString()
             );
 
             await insightService.generateInsights(
+              ownerId,
               businessId.toString()
             );
 
