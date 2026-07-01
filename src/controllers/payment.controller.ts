@@ -16,6 +16,7 @@ import {
 
 import WebhookEvent from "../models/WebhookEvent";
 import { addPaymentJob } from "../queues/payment.queue";
+import { applySubscriptionUpgrade } from "../services/subscription/subscription.service";
 
 /**
  * INITIALIZE PAYMENT
@@ -183,14 +184,14 @@ export const verifyPayment = async (
     try {
         const reference = String(req.params.reference);
 
-        const payment =
-            await Payment.findOne({
-                reference,
-                user: req.userId,
-            });
+        const payment = await Payment.findOne({
+            reference,
+            user: req.userId,
+        });
 
         if (!payment) {
             return res.status(404).json({
+                success: false,
                 message: "Payment not found",
             });
         }
@@ -201,27 +202,56 @@ export const verifyPayment = async (
         const verification =
             await provider.verifyPayment(reference);
 
+        if (!verification.success) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment verification failed",
+                verification,
+            });
+        }
+
         if (
-            verification.success &&
-            payment.status !== "SUCCESS"
+            verification.status?.toLowerCase() !== "success"
         ) {
+            return res.status(400).json({
+                success: false,
+                message: "Payment not successful",
+                verification,
+            });
+        }
+
+        if (payment.status !== "SUCCESS") {
             payment.status = "SUCCESS";
+
             payment.paidAt = new Date(
-                verification.paidAt || Date.now()
+                verification.paidAt ?? Date.now()
             );
 
             await payment.save();
         }
 
+        /**
+         * VERY IMPORTANT
+         * Ensure subscription exists even if
+         * webhook hasn't run yet.
+         */
+        const subscription =
+            await applySubscriptionUpgrade(payment);
+
         return res.status(200).json({
             success: true,
             payment,
+            subscription,
             verification,
         });
     } catch (error) {
-        console.error("Verify Payment Error:", error);
+        console.error(
+            "Verify Payment Error:",
+            error
+        );
 
         return res.status(500).json({
+            success: false,
             message: "Failed to verify payment",
         });
     }

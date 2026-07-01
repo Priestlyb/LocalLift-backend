@@ -17,8 +17,9 @@ export const getSubscription = async (
         });
 
         if (!subscription) {
-            return res.status(404).json({
-                message: "Subscription not found",
+            return res.status(200).json({
+                subscription: null,
+                limits: null,
             });
         }
 
