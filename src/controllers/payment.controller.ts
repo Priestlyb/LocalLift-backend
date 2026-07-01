@@ -143,19 +143,17 @@ export const initializePayment = async (
         });
 
         const result =
-            await paymentProvider.initializePayment(
-                {
-                    email: user.email,
-                    amount:
-                        planConfig.price,
-                    reference,
-                    metadata: {
-                        userId:
-                            req.userId,
-                        plan,
-                    },
-                }
-            );
+            await paymentProvider.initializePayment({
+                email: user.email,
+                amount: planConfig.price,
+                reference,
+                callbackUrl:
+                    process.env.PAYMENT_CALLBACK_URL,
+                metadata: {
+                    userId: req.userId,
+                    plan,
+                },
+            });
 
         return res.status(200).json({
             success: true,
