@@ -58,15 +58,11 @@ export const initializePayment = async (
             });
         }
 
-        const user =
-            await User.findById(
-                req.userId
-            );
+        const user = await User.findById(req.userId);
 
         if (!user) {
             return res.status(404).json({
-                message:
-                    "User not found",
+                message: "User not found",
             });
         }
 
@@ -77,14 +73,25 @@ export const initializePayment = async (
 
         if (!planConfig) {
             return res.status(400).json({
-                message:
-                    "Invalid plan",
+                message: "Invalid plan",
             });
         }
 
+        const callbackUrl =
+            process.env.PAYMENT_CALLBACK_URL;
+
+        console.log(
+            "PAYMENT_CALLBACK_URL:",
+            callbackUrl
+        );
+
+        const paymentProvider =
+            PaymentService.getProvider(
+                provider
+            );
+
         /**
          * Prevent duplicate pending payments
-         * for the same provider and plan.
          */
         const existingPayment =
             await Payment.findOne({
@@ -94,27 +101,19 @@ export const initializePayment = async (
                 status: "PENDING",
             });
 
-        const paymentProvider =
-            PaymentService.getProvider(
-                provider
-            );
-
         if (existingPayment) {
             const result =
-                await paymentProvider.initializePayment(
-                    {
-                        email: user.email,
-                        amount:
-                            planConfig.price,
-                        reference:
-                            existingPayment.reference,
-                        metadata: {
-                            userId:
-                                req.userId,
-                            plan,
-                        },
-                    }
-                );
+                await paymentProvider.initializePayment({
+                    email: user.email,
+                    amount: planConfig.price,
+                    reference:
+                        existingPayment.reference,
+                    callbackUrl,
+                    metadata: {
+                        userId: req.userId,
+                        plan,
+                    },
+                });
 
             return res.status(200).json({
                 success: true,
@@ -137,8 +136,7 @@ export const initializePayment = async (
             provider,
             reference,
             plan,
-            amount:
-                planConfig.price,
+            amount: planConfig.price,
             status: "PENDING",
         });
 
@@ -147,8 +145,7 @@ export const initializePayment = async (
                 email: user.email,
                 amount: planConfig.price,
                 reference,
-                callbackUrl:
-                    process.env.PAYMENT_CALLBACK_URL,
+                callbackUrl,
                 metadata: {
                     userId: req.userId,
                     plan,
@@ -228,6 +225,72 @@ export const verifyPayment = async (
             message: "Failed to verify payment",
         });
     }
+};
+
+/**
+ * PAYSTACK SUCCESS REDIRECT
+ *
+ * Used by the React Native WebView.
+ * The frontend detects this URL and
+ * navigates to the verification screen.
+ */
+export const paymentSuccess = async (
+    req: Request,
+    res: Response
+) => {
+    return res.status(200).send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Payment Successful</title>
+    <meta charset="utf-8" />
+</head>
+<body style="
+    font-family: Arial, sans-serif;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    background:#F8FAFC;
+">
+    <div style="text-align:center;">
+        <h2>Payment Successful</h2>
+        <p>Returning to LocalLift...</p>
+    </div>
+</body>
+</html>
+`);
+};
+
+/**
+ * PAYSTACK FAILED REDIRECT
+ */
+export const paymentFailed = async (
+    req: Request,
+    res: Response
+) => {
+    return res.status(200).send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Payment Failed</title>
+    <meta charset="utf-8" />
+</head>
+<body style="
+    font-family: Arial, sans-serif;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    background:#F8FAFC;
+">
+    <div style="text-align:center;">
+        <h2>Payment Failed</h2>
+        <p>You can close this page and return to the app.</p>
+    </div>
+</body>
+</html>
+`);
 };
 
 /**

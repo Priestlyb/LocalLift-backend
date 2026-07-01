@@ -6,16 +6,22 @@ import {
     koraWebhook,
     paystackWebhook,
     getPaymentHistory,
+    paymentSuccess,
+    paymentFailed,
 } from "../controllers/payment.controller";
 
 import {
     protect,
-    authorize
+    authorize,
 } from "../middleware/auth.middleware";
+
 import { validateInitializePayment } from "../validators/payment.validator";
 
 const router = Router();
 
+/**
+ * PAYMENT INITIALIZATION
+ */
 router.post(
     "/initialize",
     protect,
@@ -24,6 +30,9 @@ router.post(
     initializePayment
 );
 
+/**
+ * PAYMENT VERIFICATION
+ */
 router.get(
     "/verify/:reference",
     protect,
@@ -31,6 +40,26 @@ router.get(
     verifyPayment
 );
 
+/**
+ * PAYSTACK CALLBACK PAGES
+ *
+ * These are not webhooks.
+ * They are redirect pages that the React Native
+ * WebView listens for after Paystack finishes.
+ */
+router.get(
+    "/payment-success",
+    paymentSuccess
+);
+
+router.get(
+    "/payment-failed",
+    paymentFailed
+);
+
+/**
+ * WEBHOOKS
+ */
 router.post(
     "/webhook/kora",
     koraWebhook
@@ -41,6 +70,9 @@ router.post(
     paystackWebhook
 );
 
+/**
+ * PAYMENT HISTORY
+ */
 router.get(
     "/history",
     protect,
