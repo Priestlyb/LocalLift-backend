@@ -1,20 +1,31 @@
 import { Response } from "express";
 
-import Subscription from "../models/Subscription";
 import { AuthRequest } from "../middleware/auth.middleware";
+
 import { PLANS } from "../constants/plans";
 
+import {
+    getSubscription as getUserSubscription,
+    cancelSubscription as cancelUserSubscription,
+} from "../services/subscription/subscription.service";
+
 /**
- * GET SUBSCRIPTION
+ * GET CURRENT SUBSCRIPTION
  */
 export const getSubscription = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
-        let subscription = await Subscription.findOne({
-            user: req.userId,
-        });
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+            });
+        }
+
+        const subscription =
+            await getUserSubscription(req.userId);
 
         if (!subscription) {
             return res.status(200).json({
@@ -23,7 +34,8 @@ export const getSubscription = async (
             });
         }
 
-        return res.json({
+        return res.status(200).json({
+            success: true,
             subscription,
             limits:
                 PLANS[
@@ -31,9 +43,13 @@ export const getSubscription = async (
                 ],
         });
     } catch (error) {
-        console.error("Get Subscription Error:", error);
+        console.error(
+            "Get Subscription Error:",
+            error
+        );
 
         return res.status(500).json({
+            success: false,
             message: "Server Error",
         });
     }
@@ -41,72 +57,56 @@ export const getSubscription = async (
 
 /**
  * CANCEL SUBSCRIPTION
+ *
+ * By default this schedules the cancellation
+ * for the end of the current billing cycle.
+ *
+ * Send:
+ * {
+ *   "immediate": true
+ * }
+ *
+ * to revoke access immediately.
  */
 export const cancelSubscription = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+            });
+        }
+
+        const immediate =
+            req.body?.immediate === true;
+
         const subscription =
-            await Subscription.findOne({
-                user: req.userId,
-            });
-
-        if (!subscription) {
-            return res.status(404).json({
-                message:
-                    "Subscription not found",
-            });
-        }
-
-        if (
-            subscription.plan ===
-            "FREE"
-        ) {
-            return res.status(400).json({
-                message:
-                    "Free subscriptions cannot be cancelled.",
-            });
-        }
-
-        if (
-            subscription.status ===
-            "CANCELLED"
-        ) {
-            return res.status(400).json({
-                message:
-                    "Subscription is already cancelled.",
-                subscription,
-            });
-        }
-
-        subscription.status =
-            "CANCELLED";
-
-        subscription.cancelledAt =
-            new Date();
-
-        subscription.autoRenew =
-            false;
-
-        await subscription.save();
+            await cancelUserSubscription(
+                req.userId,
+                immediate
+            );
 
         return res.status(200).json({
             success: true,
-            message:
-                "Subscription cancelled successfully.",
+            message: immediate
+                ? "Subscription cancelled immediately."
+                : "Subscription will be cancelled at the end of the current billing period.",
             subscription,
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error(
             "Cancel Subscription Error:",
             error
         );
 
-        return res.status(500).json({
+        return res.status(400).json({
             success: false,
             message:
-                "Server Error",
+                error?.message ??
+                "Failed to cancel subscription",
         });
     }
 };

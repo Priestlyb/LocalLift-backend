@@ -16,7 +16,11 @@ import {
 
 import WebhookEvent from "../models/WebhookEvent";
 import { addPaymentJob } from "../queues/payment.queue";
-import { applySubscriptionUpgrade } from "../services/subscription/subscription.service";
+import entitlementService from "../services/subscription/entitlement.service";
+import Subscription from "../models/Subscription";
+
+import { applySubscriptionUpgrade } from "../services/subscription/applySubscriptionUpgrade";
+import { schedulePlanChange } from "../services/subscription/schedulePlanChange";
 
 /**
  * INITIALIZE PAYMENT
@@ -75,6 +79,54 @@ export const initializePayment = async (
         if (!planConfig) {
             return res.status(400).json({
                 message: "Invalid plan",
+            });
+        }
+
+        /**
+ * Determine whether this is
+ * an upgrade or downgrade.
+ */
+        const currentSubscription =
+            await Subscription.findOne({
+                user: req.userId,
+            });
+
+        const currentPlan =
+            currentSubscription?.plan ?? "FREE";
+
+        /**
+         * Same plan
+         */
+        if (currentPlan === plan) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "You are already on this plan.",
+            });
+        }
+
+        /**
+         * Downgrades are scheduled.
+         * They do NOT require payment.
+         */
+        if (
+            entitlementService.canDowngrade(
+                currentPlan,
+                plan
+            )
+        ) {
+            const subscription =
+                await schedulePlanChange(
+                    req.userId!,
+                    plan
+                );
+
+            return res.status(200).json({
+                success: true,
+                scheduled: true,
+                subscription,
+                message:
+                    `Your plan will change to ${plan} when your current subscription ends.`,
             });
         }
 

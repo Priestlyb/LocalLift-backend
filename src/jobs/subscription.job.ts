@@ -1,32 +1,30 @@
 import cron from "node-cron";
 
-import Subscription from "../models/Subscription";
+import { expireSubscriptions } from "../services/subscription/expireSubscriptions";
 
-export const startSubscriptionJob =
-    () => {
-        cron.schedule(
-            "0 0 * * *",
-            async () => {
-                try {
-                    await Subscription.updateMany(
-                        {
-                            expiresAt: {
-                                $lt: new Date(),
-                            },
-                            status: "ACTIVE",
-                        },
-                        {
-                            status: "EXPIRED",
-                            plan: "FREE",
-                        }
-                    );
+/**
+ * Runs every day at midnight.
+ *
+ * Responsibilities:
+ * - Expire subscriptions whose billing period has ended.
+ * - Apply any scheduled plan downgrades.
+ * - Reset expired users to the FREE plan.
+ */
+export const startSubscriptionJob = () => {
+    cron.schedule("0 0 * * *", async () => {
+        try {
+            const result =
+                await expireSubscriptions();
 
-                    console.log(
-                        "Subscription expiry job completed"
-                    );
-                } catch (error) {
-                    console.error(error);
-                }
-            }
-        );
-    };
+            console.log(
+                "[CRON] Subscription expiry completed",
+                result
+            );
+        } catch (error) {
+            console.error(
+                "[CRON] Subscription expiry failed",
+                error
+            );
+        }
+    });
+};

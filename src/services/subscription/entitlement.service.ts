@@ -9,9 +9,20 @@ import {
 
 /**
  * Service responsible for resolving plan entitlements.
- * This is the single source of truth for subscription features.
+ * This is the single source of truth for subscription
+ * features, pricing and plan hierarchy.
  */
 class EntitlementService {
+  /**
+   * Plan hierarchy.
+   */
+  private readonly planOrder: PlanKey[] = [
+    "FREE",
+    "STARTER",
+    "GROWTH",
+    "PRO",
+  ];
+
   /**
    * Returns the entitlement for a plan.
    *
@@ -21,7 +32,9 @@ class EntitlementService {
     const entitlement = PLANS[plan];
 
     if (!entitlement) {
-      throw new Error(`Unknown subscription plan: ${plan}`);
+      throw new Error(
+        `Unknown subscription plan: ${plan}`
+      );
     }
 
     return entitlement;
@@ -97,22 +110,67 @@ class EntitlementService {
   }
 
   /**
+   * Returns the numeric rank of a plan.
+   */
+  getPlanRank(
+    plan: PlanKey
+  ): number {
+    return this.planOrder.indexOf(plan);
+  }
+
+  /**
+   * Returns the plan hierarchy.
+   */
+  getPlanOrder(): PlanKey[] {
+    return [...this.planOrder];
+  }
+
+  /**
+   * Returns the next higher plan.
+   */
+  getNextPlan(
+    plan: PlanKey
+  ): PlanKey | null {
+    const index =
+      this.getPlanRank(plan);
+
+    if (
+      index === -1 ||
+      index ===
+      this.planOrder.length - 1
+    ) {
+      return null;
+    }
+
+    return this.planOrder[index + 1];
+  }
+
+  /**
+   * Returns the next lower plan.
+   */
+  getPreviousPlan(
+    plan: PlanKey
+  ): PlanKey | null {
+    const index =
+      this.getPlanRank(plan);
+
+    if (index <= 0) {
+      return null;
+    }
+
+    return this.planOrder[index - 1];
+  }
+
+  /**
    * Determines whether a plan can be upgraded.
    */
   canUpgrade(
     current: PlanKey,
     target: PlanKey
   ): boolean {
-    const order: PlanKey[] = [
-      "FREE",
-      "STARTER",
-      "GROWTH",
-      "PRO",
-    ];
-
     return (
-      order.indexOf(target) >
-      order.indexOf(current)
+      this.getPlanRank(target) >
+      this.getPlanRank(current)
     );
   }
 
@@ -123,17 +181,20 @@ class EntitlementService {
     current: PlanKey,
     target: PlanKey
   ): boolean {
-    const order: PlanKey[] = [
-      "FREE",
-      "STARTER",
-      "GROWTH",
-      "PRO",
-    ];
-
     return (
-      order.indexOf(target) <
-      order.indexOf(current)
+      this.getPlanRank(target) <
+      this.getPlanRank(current)
     );
+  }
+
+  /**
+   * Returns whether two plans are equal.
+   */
+  isSamePlan(
+    current: PlanKey,
+    target: PlanKey
+  ): boolean {
+    return current === target;
   }
 
   /**
@@ -142,7 +203,10 @@ class EntitlementService {
   isValidPlan(
     plan: string
   ): plan is PlanKey {
-    return plan in PLANS;
+    return Object.prototype.hasOwnProperty.call(
+      PLANS,
+      plan
+    );
   }
 }
 
