@@ -144,41 +144,24 @@ export const initializePayment = async (
             );
 
         /**
-         * Prevent duplicate pending payments
-         */
-        const existingPayment =
-            await Payment.findOne({
-                user: req.userId,
-                provider,
-                plan,
-                status: "PENDING",
-            });
+             * Find any existing pending payment
+        */
+        const existingPayment = await Payment.findOne({
+            user: req.userId,
+            provider,
+            plan,
+            status: "PENDING",
+        });
 
         if (existingPayment) {
-            const result =
-                await paymentProvider.initializePayment({
-                    email: user.email,
-                    amount: planConfig.price,
-                    reference:
-                        existingPayment.reference,
-                    callbackUrl,
-                    metadata: {
-                        userId: req.userId,
-                        plan,
-                    },
-                });
+            console.log(
+                "Cancelling stale payment:",
+                existingPayment.reference
+            );
 
-            return res.status(200).json({
-                success: true,
-                message:
-                    "Existing pending payment found.",
-                provider,
-                plan,
-                reference:
-                    existingPayment.reference,
-                authorizationUrl:
-                    result.authorizationUrl,
-            });
+            existingPayment.status = "FAILED";
+
+            await existingPayment.save();
         }
 
         const reference =

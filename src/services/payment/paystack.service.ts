@@ -16,36 +16,40 @@ export class PaystackService
     async initializePayment(
         payload: InitializePaymentDto
     ): Promise<InitializePaymentResponse> {
-        const response =
-            await paystackClient.post(
+        try {
+            console.log("PAYSTACK PAYLOAD", {
+                email: payload.email,
+                amount: payload.amount * 100,
+                reference: payload.reference,
+                callback_url: payload.callbackUrl,
+                metadata: payload.metadata,
+            });
+
+            const response = await paystackClient.post(
                 "/transaction/initialize",
                 {
-                    email:
-                        payload.email,
-
-                    amount:
-                        payload.amount *
-                        100,
-
-                    reference:
-                        payload.reference,
-
-                    callback_url:
-                        payload.callbackUrl,
-
-                    metadata:
-                        payload.metadata,
+                    email: payload.email,
+                    amount: payload.amount * 100,
+                    reference: payload.reference,
+                    callback_url: payload.callbackUrl,
+                    metadata: payload.metadata,
                 }
             );
 
-        return {
-            authorizationUrl:
-                response.data.data
-                    .authorization_url,
+            console.log("PAYSTACK RESPONSE", response.data);
 
-            reference:
-                payload.reference,
-        };
+            return {
+                authorizationUrl:
+                    response.data.data.authorization_url,
+                reference: payload.reference,
+            };
+        } catch (error: any) {
+            console.error("PAYSTACK STATUS:", error.response?.status);
+            console.error("PAYSTACK DATA:", error.response?.data);
+            console.error("PAYSTACK MESSAGE:", error.message);
+
+            throw error;
+        }
     }
 
     async verifyPayment(
