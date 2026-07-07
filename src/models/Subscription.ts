@@ -43,10 +43,22 @@ export interface ISubscription
   expiresAt: Date | null;
 
   /**
-   * Date the subscription was cancelled.
-   * Null until cancellation.
+   * Date the subscription cancellation
+   * was requested or completed.
    */
   cancelledAt: Date | null;
+
+  /**
+   * Indicates the user has requested
+   * cancellation at the end of the
+   * current billing period.
+   *
+   * While true:
+   * - status remains ACTIVE
+   * - access continues until expiresAt
+   * - subscription may be resumed
+   */
+  cancelAtPeriodEnd: boolean;
 
   /**
    * Billing duration in months.
@@ -54,8 +66,7 @@ export interface ISubscription
   durationMonths: number;
 
   /**
-   * Whether the subscription should
-   * automatically renew.
+   * Whether future billing should occur.
    */
   autoRenew: boolean;
 
@@ -108,7 +119,7 @@ const subscriptionSchema =
       /**
        * Whether nextPlan should
        * replace plan when the
-       * subscription renews.
+       * current billing cycle ends.
        */
       changeAtRenewal: {
         type: Boolean,
@@ -138,7 +149,7 @@ const subscriptionSchema =
 
       /**
        * Subscription expiration date.
-       * FREE subscriptions can leave this null.
+       * FREE subscriptions may leave this null.
        */
       expiresAt: {
         type: Date,
@@ -147,11 +158,23 @@ const subscriptionSchema =
       },
 
       /**
-       * Date the subscription was cancelled.
+       * Date cancellation was requested
+       * or completed.
        */
       cancelledAt: {
         type: Date,
         default: null,
+        index: true,
+      },
+
+      /**
+       * True when the user has scheduled
+       * cancellation for the end of the
+       * current billing period.
+       */
+      cancelAtPeriodEnd: {
+        type: Boolean,
+        default: false,
         index: true,
       },
 
@@ -165,8 +188,7 @@ const subscriptionSchema =
       },
 
       /**
-       * Whether this subscription
-       * automatically renews.
+       * Whether future billing should occur.
        */
       autoRenew: {
         type: Boolean,
@@ -174,7 +196,7 @@ const subscriptionSchema =
       },
 
       /**
-       * Last processed payment.
+       * Last processed payment reference.
        */
       lastPaymentReference: {
         type: String,

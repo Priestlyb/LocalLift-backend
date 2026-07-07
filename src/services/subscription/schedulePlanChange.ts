@@ -10,14 +10,6 @@ const PLAN_ORDER: Record<SubscriptionPlan, number> = {
     PRO: 3,
 };
 
-/**
- * Schedules a plan change to occur at the
- * end of the current billing cycle.
- *
- * Upgrades should NOT use this service.
- * They should be handled immediately after
- * successful payment via applySubscriptionUpgrade().
- */
 export const schedulePlanChange = async (
     userId: string,
     nextPlan: SubscriptionPlan
@@ -39,30 +31,26 @@ export const schedulePlanChange = async (
         );
     }
 
-    /**
-     * Cannot schedule a change on an
-     * inactive subscription.
-     */
     if (subscription.status !== "ACTIVE") {
         throw new Error(
             "Subscription is not active"
         );
     }
 
-    /**
-     * Already on this plan.
-     */
+    // Don't allow plan changes once cancellation
+    // has already been scheduled.
+    if (subscription.cancelAtPeriodEnd) {
+        throw new Error(
+            "Resume your subscription before changing plans."
+        );
+    }
+
     if (subscription.plan === nextPlan) {
         throw new Error(
             "Already subscribed to this plan"
         );
     }
 
-    /**
-     * Prevent using this for upgrades.
-     * Upgrades should happen immediately
-     * after payment verification.
-     */
     if (
         PLAN_ORDER[nextPlan] >
         PLAN_ORDER[subscription.plan]
@@ -72,12 +60,7 @@ export const schedulePlanChange = async (
         );
     }
 
-    /**
-     * Replace any previously scheduled
-     * downgrade.
-     */
     subscription.nextPlan = nextPlan;
-
     subscription.changeAtRenewal = true;
 
     await subscription.save();
@@ -89,9 +72,6 @@ export const schedulePlanChange = async (
     return subscription;
 };
 
-/**
- * Removes any scheduled plan change.
- */
 export const cancelScheduledPlanChange =
     async (userId: string) => {
         const subscription =
@@ -106,7 +86,6 @@ export const cancelScheduledPlanChange =
         }
 
         subscription.nextPlan = null;
-
         subscription.changeAtRenewal = false;
 
         await subscription.save();
@@ -118,10 +97,6 @@ export const cancelScheduledPlanChange =
         return subscription;
     };
 
-/**
- * Returns the currently scheduled
- * plan change, if one exists.
- */
 export const getScheduledPlanChange =
     async (userId: string) => {
         const subscription =

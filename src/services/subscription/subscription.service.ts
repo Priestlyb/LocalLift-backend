@@ -8,6 +8,7 @@ export {
 
 export {
   cancelSubscription,
+  resumeSubscription,
 } from "./cancelSubscription";
 
 export {

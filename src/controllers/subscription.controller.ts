@@ -29,8 +29,10 @@ export const getSubscription = async (
 
         if (!subscription) {
             return res.status(200).json({
+                success: true,
                 subscription: null,
                 limits: null,
+                canResume: false,
             });
         }
 
@@ -41,6 +43,9 @@ export const getSubscription = async (
                 PLANS[
                 subscription.plan as keyof typeof PLANS
                 ],
+            canResume:
+                subscription.status === "ACTIVE" &&
+                subscription.cancelAtPeriodEnd === true,
         });
     } catch (error) {
         console.error(
@@ -61,12 +66,20 @@ export const getSubscription = async (
  * By default this schedules the cancellation
  * for the end of the current billing cycle.
  *
- * Send:
+ * Body:
  * {
  *   "immediate": true
  * }
  *
- * to revoke access immediately.
+ * immediate = false (default)
+ *  - User keeps access until endsAt.
+ *  - User cannot purchase another subscription.
+ *  - User may resume before expiry.
+ *
+ * immediate = true
+ *  - Subscription ends immediately.
+ *  - Access is revoked.
+ *  - User may purchase another subscription immediately.
  */
 export const cancelSubscription = async (
     req: AuthRequest,
@@ -92,9 +105,13 @@ export const cancelSubscription = async (
         return res.status(200).json({
             success: true,
             message: immediate
-                ? "Subscription cancelled immediately."
-                : "Subscription will be cancelled at the end of the current billing period.",
+                ? "Subscription cancelled immediately. You may subscribe again at any time."
+                : "Subscription will remain active until the end of your current billing period. You can resume it anytime before it expires.",
             subscription,
+            canResume:
+                !immediate &&
+                subscription.status === "ACTIVE" &&
+                subscription.cancelAtPeriodEnd === true,
         });
     } catch (error: any) {
         console.error(
