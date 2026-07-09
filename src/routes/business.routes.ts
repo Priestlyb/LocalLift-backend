@@ -9,7 +9,7 @@ import {
 
 import {
     protect,
-    authorize
+    authorize,
 } from "../middleware/auth.middleware";
 
 import {
@@ -17,6 +17,7 @@ import {
 } from "../validators/business.validator";
 
 import { validate } from "../middleware/validation.middleware";
+import { upload } from "../middleware/upload.middleware";
 
 const router = Router();
 
@@ -40,6 +41,7 @@ router.put(
     "/",
     protect,
     authorize("CUSTOMER"),
+    upload.single("logo"),
     updateBusiness
 );
 

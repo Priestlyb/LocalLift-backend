@@ -2,6 +2,7 @@ import { Response } from "express";
 
 import Business from "../models/Business";
 import { AuthRequest } from "../middleware/auth.middleware";
+import { StorageService } from "../services/images/storage.service";
 
 // Create Business
 
@@ -115,14 +116,27 @@ export const updateBusiness = async (
     res: Response
 ) => {
     try {
+        const updates: Record<string, any> = {
+            ...req.body,
+        };
+
+        /**
+         * Upload logo to Cloudflare R2 if one was provided.
+         * Requires upload.single("logo") middleware.
+         */
+        if (req.file) {
+            const upload =
+                await StorageService.upload(req.file);
+
+            updates.logo = upload.url;
+        }
+
         const business =
             await Business.findOneAndUpdate(
                 {
                     owner: req.userId,
                 },
-                {
-                    ...req.body,
-                },
+                updates,
                 {
                     new: true,
                     runValidators: true,

@@ -1,37 +1,118 @@
 import { Router } from "express";
 
 import {
-  register,
+  sendRegistrationOtp,
+  verifyRegistration,
+  resendRegistrationOtp,
   login,
+  googleLogin,
   getProfile,
   logout,
   deleteUser,
   inviteStaff,
 } from "../controllers/auth.controller";
 
-import { protect, authorize } from "../middleware/auth.middleware";
+import {
+  protect,
+  authorize,
+} from "../middleware/auth.middleware";
+
+import {
+  registrationOtpLimiter,
+  verifyOtpLimiter,
+} from "../middleware/rateLimit.middleware";
 
 const router = Router();
 
 /**
+ * ==========================================
  * PUBLIC ROUTES
+ * ==========================================
  */
-router.post("/register", register);
+
+/**
+ * Step 1:
+ * Send registration OTP
+ */
+router.post(
+  "/register/send-otp",
+  registrationOtpLimiter,
+  sendRegistrationOtp
+);
+
+/**
+ * Step 2:
+ * Verify OTP and create account
+ */
+router.post(
+  "/register/verify",
+  verifyOtpLimiter,
+  verifyRegistration
+);
+
+/**
+ * Resend registration OTP
+ */
+router.post(
+  "/register/resend-otp",
+  registrationOtpLimiter,
+  resendRegistrationOtp
+);
+
+/**
+ * Login
+ */
 router.post("/login", login);
 
 /**
- * PROTECTED ROUTES
- * Any logged-in user
+ * Google Sign-In / Sign-Up
  */
-router.post("/logout", protect, logout);
-
-router.get("/profile", protect, getProfile);
-
-router.delete("/delete", protect, deleteUser);
+router.post(
+  "/google",
+  googleLogin
+);
 
 /**
+ * ==========================================
+ * PROTECTED ROUTES
+ * ==========================================
+ */
+
+/**
+ * Logout
+ */
+router.post(
+  "/logout",
+  protect,
+  logout
+);
+
+/**
+ * Current user's profile
+ */
+router.get(
+  "/profile",
+  protect,
+  getProfile
+);
+
+/**
+ * Delete current user
+ */
+router.delete(
+  "/delete",
+  protect,
+  deleteUser
+);
+
+/**
+ * ==========================================
  * BUSINESS OWNER ROUTES
- * Only CUSTOMER role can invite staff
+ * ==========================================
+ */
+
+/**
+ * Invite staff member
  */
 router.post(
   "/staff/invite",
