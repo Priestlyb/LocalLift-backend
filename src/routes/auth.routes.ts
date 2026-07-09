@@ -10,6 +10,9 @@ import {
   logout,
   deleteUser,
   inviteStaff,
+  forgotPassword,
+  verifyResetOtp,
+  resetPassword,
 } from "../controllers/auth.controller";
 
 import {
@@ -31,8 +34,7 @@ const router = Router();
  */
 
 /**
- * Step 1:
- * Send registration OTP
+ * Registration
  */
 router.post(
   "/register/send-otp",
@@ -40,19 +42,12 @@ router.post(
   sendRegistrationOtp
 );
 
-/**
- * Step 2:
- * Verify OTP and create account
- */
 router.post(
   "/register/verify",
   verifyOtpLimiter,
   verifyRegistration
 );
 
-/**
- * Resend registration OTP
- */
 router.post(
   "/register/resend-otp",
   registrationOtpLimiter,
@@ -65,11 +60,35 @@ router.post(
 router.post("/login", login);
 
 /**
- * Google Sign-In / Sign-Up
+ * Google Login
+ */
+router.post("/google", googleLogin);
+
+/**
+ * Forgot Password
  */
 router.post(
-  "/google",
-  googleLogin
+  "/password/forgot",
+  registrationOtpLimiter,
+  forgotPassword
+);
+
+/**
+ * Verify Password Reset OTP
+ */
+router.post(
+  "/password/verify-otp",
+  verifyOtpLimiter,
+  verifyResetOtp
+);
+
+/**
+ * Reset Password
+ */
+router.post(
+  "/password/reset",
+  verifyOtpLimiter,
+  resetPassword
 );
 
 /**
@@ -78,27 +97,18 @@ router.post(
  * ==========================================
  */
 
-/**
- * Logout
- */
 router.post(
   "/logout",
   protect,
   logout
 );
 
-/**
- * Current user's profile
- */
 router.get(
   "/profile",
   protect,
   getProfile
 );
 
-/**
- * Delete current user
- */
 router.delete(
   "/delete",
   protect,
@@ -111,9 +121,6 @@ router.delete(
  * ==========================================
  */
 
-/**
- * Invite staff member
- */
 router.post(
   "/staff/invite",
   protect,
