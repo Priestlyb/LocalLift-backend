@@ -141,13 +141,6 @@ registrationOtpSchema.index(
     }
 );
 
-/**
- * Speed up lookups by email.
- */
-registrationOtpSchema.index({
-    email: 1,
-});
-
 export default mongoose.model<IRegistrationOtp>(
     "RegistrationOtp",
     registrationOtpSchema

@@ -75,10 +75,6 @@ const loadRoute = (
 ) => {
   try {
     app.use(path, router);
-
-    console.log(
-      `✅ Route loaded: ${path}`
-    );
   } catch (error) {
     console.error(
       `❌ Failed loading route: ${path}`,
