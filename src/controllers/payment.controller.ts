@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Request, Response } from "express";
 
 import User from "../models/User";
-import Payment, { IPayment } from "../models/Payment";
+import Payment from "../models/Payment";
 
 import { AuthRequest } from "../middleware/auth.middleware";
 import { PLANS } from "../constants/plans";
@@ -16,12 +16,31 @@ import {
 
 import WebhookEvent from "../models/WebhookEvent";
 import { addPaymentJob } from "../queues/payment.queue";
+
 import entitlementService from "../services/subscription/entitlement.service";
+
 import Subscription from "../models/Subscription";
 
 import { applySubscriptionUpgrade } from "../services/subscription/applySubscriptionUpgrade";
 import { schedulePlanChange } from "../services/subscription/schedulePlanChange";
 
+/**
+ * INITIALIZE PAYMENT
+ *
+ * Handles:
+ *
+ * ACTIVE subscription
+ *  - Upgrade -> payment required
+ *  - Same plan -> rejected
+ *  - Downgrade -> scheduled
+ *
+ * EXPIRED / CANCELLED subscription
+ *  - Same plan -> allowed (renewal)
+ *  - Different plan -> allowed (new subscription)
+ *
+ * FREE subscription
+ *  - Any paid plan -> payment required
+ */
 /**
  * INITIALIZE PAYMENT
  */
@@ -40,6 +59,7 @@ export const initializePayment = async (
 
         if (!provider || !plan) {
             return res.status(400).json({
+                success: false,
                 message:
                     "Provider and plan are required",
             });
@@ -51,6 +71,7 @@ export const initializePayment = async (
             )
         ) {
             return res.status(400).json({
+                success: false,
                 message:
                     "Unsupported payment provider",
             });
@@ -58,15 +79,26 @@ export const initializePayment = async (
 
         if (plan === "FREE") {
             return res.status(400).json({
+                success: false,
                 message:
                     "FREE plan does not require payment",
             });
         }
 
-        const user = await User.findById(req.userId);
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+            });
+        }
+
+        const user = await User.findById(
+            req.userId
+        );
 
         if (!user) {
             return res.status(404).json({
+                success: false,
                 message: "User not found",
             });
         }
@@ -78,26 +110,118 @@ export const initializePayment = async (
 
         if (!planConfig) {
             return res.status(400).json({
+                success: false,
                 message: "Invalid plan",
             });
         }
 
         /**
- * Determine whether this is
- * an upgrade or downgrade.
- */
+         * ---------------------------------------
+         * GET CURRENT SUBSCRIPTION
+         * ---------------------------------------
+         */
         const currentSubscription =
             await Subscription.findOne({
                 user: req.userId,
             });
 
-        const currentPlan =
-            currentSubscription?.plan ?? "FREE";
+        /**
+         * Determine whether the existing
+         * subscription is actually active.
+         *
+         * An EXPIRED subscription should be
+         * treated as FREE for purchasing.
+         */
+        const now = new Date();
+
+        const isCurrentlyActive =
+            currentSubscription?.status ===
+            "ACTIVE" &&
+            (
+                !currentSubscription.expiresAt ||
+                currentSubscription.expiresAt > now
+            );
 
         /**
-         * Same plan
+         * If the subscription is marked ACTIVE
+         * but the expiration date has passed,
+         * immediately mark it as EXPIRED.
          */
-        if (currentPlan === plan) {
+        if (
+            currentSubscription &&
+            currentSubscription.status ===
+            "ACTIVE" &&
+            currentSubscription.expiresAt &&
+            currentSubscription.expiresAt <= now
+        ) {
+            currentSubscription.status =
+                "EXPIRED";
+
+            currentSubscription.cancelAtPeriodEnd =
+                false;
+
+            currentSubscription.autoRenew =
+                false;
+
+            await currentSubscription.save();
+
+            console.log(
+                `[SUBSCRIPTION] Expired subscription ${currentSubscription._id}`
+            );
+        }
+
+        /**
+         * ---------------------------------------
+         * DETERMINE EFFECTIVE CURRENT PLAN
+         * ---------------------------------------
+         *
+         * Only an actually active subscription
+         * counts as the user's current plan.
+         *
+         * EXPIRED / CANCELLED / PAST_DUE
+         * subscriptions are treated as FREE.
+         */
+        const currentPlan: PaymentPlan =
+            isCurrentlyActive &&
+                currentSubscription
+                ? currentSubscription.plan
+                : "FREE";
+
+        console.log(
+            "[SUBSCRIPTION] Payment initialization:",
+            {
+                userId: req.userId,
+                requestedPlan: plan,
+                storedPlan:
+                    currentSubscription?.plan,
+                storedStatus:
+                    currentSubscription?.status,
+                effectiveCurrentPlan:
+                    currentPlan,
+                isCurrentlyActive,
+            }
+        );
+
+        /**
+         * ---------------------------------------
+         * SAME PLAN
+         * ---------------------------------------
+         *
+         * Only prevent payment if the user is
+         * ACTUALLY ACTIVE on that plan.
+         *
+         * This allows:
+         *
+         * GROWTH ACTIVE -> GROWTH
+         * ❌ blocked
+         *
+         * GROWTH EXPIRED -> GROWTH
+         * ✅ renewal allowed
+         */
+        if (
+            isCurrentlyActive &&
+            currentPlan === plan
+        ) {
             return res.status(400).json({
                 success: false,
                 message:
@@ -106,10 +230,18 @@ export const initializePayment = async (
         }
 
         /**
-         * Downgrades are scheduled.
-         * They do NOT require payment.
+         * ---------------------------------------
+         * DOWNGRADE
+         * ---------------------------------------
+         *
+         * Only schedule downgrades when the
+         * current subscription is actually active.
+         *
+         * An expired subscription should be
+         * treated as a fresh purchase instead.
          */
         if (
+            isCurrentlyActive &&
             entitlementService.canDowngrade(
                 currentPlan,
                 plan
@@ -117,7 +249,7 @@ export const initializePayment = async (
         ) {
             const subscription =
                 await schedulePlanChange(
-                    req.userId!,
+                    req.userId,
                     plan
                 );
 
@@ -130,6 +262,11 @@ export const initializePayment = async (
             });
         }
 
+        /**
+         * ---------------------------------------
+         * PAYMENT CALLBACK
+         * ---------------------------------------
+         */
         const callbackUrl =
             process.env.PAYMENT_CALLBACK_URL;
 
@@ -144,14 +281,17 @@ export const initializePayment = async (
             );
 
         /**
-             * Find any existing pending payment
-        */
-        const existingPayment = await Payment.findOne({
-            user: req.userId,
-            provider,
-            plan,
-            status: "PENDING",
-        });
+         * ---------------------------------------
+         * CANCEL EXISTING PENDING PAYMENT
+         * ---------------------------------------
+         */
+        const existingPayment =
+            await Payment.findOne({
+                user: req.userId,
+                provider,
+                plan,
+                status: "PENDING",
+            });
 
         if (existingPayment) {
             console.log(
@@ -164,6 +304,11 @@ export const initializePayment = async (
             await existingPayment.save();
         }
 
+        /**
+         * ---------------------------------------
+         * CREATE PAYMENT
+         * ---------------------------------------
+         */
         const reference =
             crypto.randomUUID();
 
@@ -176,17 +321,24 @@ export const initializePayment = async (
             status: "PENDING",
         });
 
+        /**
+         * ---------------------------------------
+         * INITIALIZE PROVIDER PAYMENT
+         * ---------------------------------------
+         */
         const result =
-            await paymentProvider.initializePayment({
-                email: user.email,
-                amount: planConfig.price,
-                reference,
-                callbackUrl,
-                metadata: {
-                    userId: req.userId,
-                    plan,
-                },
-            });
+            await paymentProvider.initializePayment(
+                {
+                    email: user.email,
+                    amount: planConfig.price,
+                    reference,
+                    callbackUrl,
+                    metadata: {
+                        userId: req.userId,
+                        plan,
+                    },
+                }
+            );
 
         return res.status(200).json({
             success: true,
@@ -203,6 +355,7 @@ export const initializePayment = async (
         );
 
         return res.status(500).json({
+            success: false,
             message:
                 "Failed to initialize payment",
         });
@@ -217,12 +370,19 @@ export const verifyPayment = async (
     res: Response
 ) => {
     try {
-        const reference = String(req.params.reference);
+        const reference = String(
+            req.params.reference
+        );
 
-        const payment = await Payment.findOne({
-            reference,
-            user: req.userId,
-        });
+        /**
+         * Find payment belonging to
+         * the authenticated user.
+         */
+        const payment =
+            await Payment.findOne({
+                reference,
+                user: req.userId,
+            });
 
         if (!payment) {
             return res.status(404).json({
@@ -231,47 +391,73 @@ export const verifyPayment = async (
             });
         }
 
+        /**
+         * Get provider.
+         */
         const provider =
-            PaymentService.getProvider(payment.provider);
+            PaymentService.getProvider(
+                payment.provider
+            );
 
+        /**
+         * Verify payment with provider.
+         */
         const verification =
-            await provider.verifyPayment(reference);
+            await provider.verifyPayment(
+                reference
+            );
 
         if (!verification.success) {
             return res.status(400).json({
                 success: false,
-                message: "Payment verification failed",
+                message:
+                    "Payment verification failed",
                 verification,
             });
         }
 
+        /**
+         * Make sure payment was actually successful.
+         */
         if (
-            verification.status?.toLowerCase() !== "success"
+            verification.status?.toLowerCase() !==
+            "success"
         ) {
             return res.status(400).json({
                 success: false,
-                message: "Payment not successful",
+                message:
+                    "Payment not successful",
                 verification,
             });
         }
 
+        /**
+         * Mark payment as successful.
+         */
         if (payment.status !== "SUCCESS") {
             payment.status = "SUCCESS";
 
             payment.paidAt = new Date(
-                verification.paidAt ?? Date.now()
+                verification.paidAt ??
+                Date.now()
             );
 
             await payment.save();
         }
 
         /**
-         * VERY IMPORTANT
-         * Ensure subscription exists even if
-         * webhook hasn't run yet.
+         * Apply the subscription.
+         *
+         * This handles both:
+         *
+         * - New subscriptions
+         * - Renewals
+         * - Upgrades
          */
         const subscription =
-            await applySubscriptionUpgrade(payment);
+            await applySubscriptionUpgrade(
+                payment
+            );
 
         return res.status(200).json({
             success: true,
@@ -287,7 +473,8 @@ export const verifyPayment = async (
 
         return res.status(500).json({
             success: false,
-            message: "Failed to verify payment",
+            message:
+                "Failed to verify payment",
         });
     }
 };
@@ -296,8 +483,6 @@ export const verifyPayment = async (
  * PAYSTACK SUCCESS REDIRECT
  *
  * Used by the React Native WebView.
- * The frontend detects this URL and
- * navigates to the verification screen.
  */
 export const paymentSuccess = async (
     req: Request,
@@ -367,30 +552,43 @@ export const koraWebhook = async (
 ) => {
     try {
         const provider =
-            PaymentService.getProvider("KORA");
+            PaymentService.getProvider(
+                "KORA"
+            );
 
-        const rawBody = req.body.toString("utf8");
+        const rawBody =
+            req.body.toString("utf8");
 
-        const payload = await provider.parseWebhook(
-            JSON.parse(rawBody),
-            req.headers["x-korapay-signature"] as string
-        );
+        const payload =
+            await provider.parseWebhook(
+                JSON.parse(rawBody),
+                req.headers[
+                "x-korapay-signature"
+                ] as string
+            );
 
-        if (payload.status !== "success") {
+        if (
+            payload.status !== "success"
+        ) {
             return res.sendStatus(200);
         }
 
-        const exists = await WebhookEvent.findOne({
-            provider: "KORA",
-            reference: payload.reference,
-            event: payload.status,
-        });
+        const exists =
+            await WebhookEvent.findOne({
+                provider: "KORA",
+                reference:
+                    payload.reference,
+                event: payload.status,
+            });
 
-        if (exists) return res.sendStatus(200);
+        if (exists) {
+            return res.sendStatus(200);
+        }
 
         await WebhookEvent.create({
             provider: "KORA",
-            reference: payload.reference,
+            reference:
+                payload.reference,
             event: payload.status,
             payload,
             processed: false,
@@ -402,7 +600,11 @@ export const koraWebhook = async (
 
         return res.sendStatus(200);
     } catch (error) {
-        console.error("Kora Webhook Error:", error);
+        console.error(
+            "Kora Webhook Error:",
+            error
+        );
+
         return res.sendStatus(500);
     }
 };
@@ -416,30 +618,44 @@ export const paystackWebhook = async (
 ) => {
     try {
         const provider =
-            PaymentService.getProvider("PAYSTACK");
+            PaymentService.getProvider(
+                "PAYSTACK"
+            );
 
-        const rawBody = req.body.toString("utf8");
+        const rawBody =
+            req.body.toString("utf8");
 
-        const payload = await provider.parseWebhook(
-            JSON.parse(rawBody),
-            req.headers["x-paystack-signature"] as string
-        );
+        const payload =
+            await provider.parseWebhook(
+                JSON.parse(rawBody),
+                req.headers[
+                "x-paystack-signature"
+                ] as string
+            );
 
-        if (payload.event !== "charge.success") {
+        if (
+            payload.event !==
+            "charge.success"
+        ) {
             return res.sendStatus(200);
         }
 
-        const exists = await WebhookEvent.findOne({
-            provider: "PAYSTACK",
-            reference: payload.reference,
-            event: payload.event,
-        });
+        const exists =
+            await WebhookEvent.findOne({
+                provider: "PAYSTACK",
+                reference:
+                    payload.reference,
+                event: payload.event,
+            });
 
-        if (exists) return res.sendStatus(200);
+        if (exists) {
+            return res.sendStatus(200);
+        }
 
         await WebhookEvent.create({
             provider: "PAYSTACK",
-            reference: payload.reference,
+            reference:
+                payload.reference,
             event: payload.event,
             payload,
             processed: false,
@@ -451,7 +667,11 @@ export const paystackWebhook = async (
 
         return res.sendStatus(200);
     } catch (error) {
-        console.error("Paystack Webhook Error:", error);
+        console.error(
+            "Paystack Webhook Error:",
+            error
+        );
+
         return res.sendStatus(500);
     }
 };
@@ -464,13 +684,16 @@ export const getPaymentHistory = async (
     res: Response
 ) => {
     try {
-        const payments = await Payment.find({
-            user: req.userId,
-        })
-            .sort({ createdAt: -1 })
-            .select(
-                "provider plan amount status paidAt createdAt reference"
-            );
+        const payments =
+            await Payment.find({
+                user: req.userId,
+            })
+                .sort({
+                    createdAt: -1,
+                })
+                .select(
+                    "provider plan amount status paidAt createdAt reference"
+                );
 
         return res.json({
             payments,
@@ -479,7 +702,8 @@ export const getPaymentHistory = async (
         console.error(error);
 
         return res.status(500).json({
-            message: "Failed to fetch payment history",
+            message:
+                "Failed to fetch payment history",
         });
     }
 };

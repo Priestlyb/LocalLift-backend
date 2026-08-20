@@ -4,6 +4,13 @@ import helmet from "helmet";
 import morgan from "morgan";
 
 /**
+ * Rate limiting
+ */
+import {
+  globalApiLimiter,
+} from "./middleware/rateLimit.middleware";
+
+/**
  * Route modules
  */
 import authRoutes from "./routes/auth.routes";
@@ -31,6 +38,17 @@ import "./jobs/analytics.job";
 const app = express();
 
 /**
+ * Trust proxy
+ *
+ * Required when the app is deployed behind a proxy
+ * such as Render.
+ *
+ * This allows rate-limit middleware and other
+ * middleware to correctly identify the client IP.
+ */
+app.set("trust proxy", 1);
+
+/**
  * Global middleware
  */
 app.use(cors());
@@ -41,6 +59,8 @@ app.use(morgan("dev"));
 
 /**
  * Payment webhook must receive the raw body.
+ *
+ * This must be registered BEFORE express.json().
  */
 app.use(
   "/api/v1/payments/webhook",
@@ -55,7 +75,37 @@ app.use(
 app.use(express.json());
 
 /**
+ * API prefix
+ */
+const API_PREFIX = "/api/v1";
+
+/**
+ * Global API rate limiter.
+ *
+ * Applies to all API routes:
+ *
+ * /api/v1/auth
+ * /api/v1/admin
+ * /api/v1/business
+ * /api/v1/subscription
+ * /api/v1/payments
+ * /api/v1/content
+ * /api/v1/analytics
+ * /api/v1/scheduler
+ * /api/v1/team
+ *
+ * More sensitive endpoints have their own
+ * stricter rate limiters in their route files.
+ */
+app.use(
+  API_PREFIX,
+  globalApiLimiter
+);
+
+/**
  * Health check
+ *
+ * This is intentionally outside the API rate limiter.
  */
 app.get("/", (_, res) => {
   res.json({
@@ -63,8 +113,6 @@ app.get("/", (_, res) => {
     message: "LocalLift API Running",
   });
 });
-
-const API_PREFIX = "/api/v1";
 
 /**
  * Safely register routes.
@@ -133,6 +181,8 @@ loadRoute(
 
 /**
  * Debug endpoint
+ *
+ * Only available outside production.
  */
 if (
   process.env.NODE_ENV !==
@@ -149,6 +199,9 @@ if (
 
       stack.forEach(
         (middleware: any) => {
+          /**
+           * Direct route.
+           */
           if (
             middleware.route
           ) {
@@ -158,13 +211,17 @@ if (
                   .methods
               )[0].toUpperCase(),
 
-              path: middleware.route
-                .path,
+              path:
+                middleware.route
+                  .path,
             });
 
             return;
           }
 
+          /**
+           * Router middleware.
+           */
           if (
             middleware.name ===
             "router"
@@ -184,8 +241,10 @@ if (
                           .methods
                       )[0].toUpperCase(),
 
-                    path: handler
-                      .route.path,
+                    path:
+                      handler
+                        .route
+                        .path,
                   });
                 }
               }
@@ -206,14 +265,18 @@ if (
 /**
  * 404 handler
  */
-app.use((req, res) => {
-  res.status(404).json({
-    success: false,
+app.use(
+  (req, res) => {
+    res.status(404).json({
+      success: false,
 
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
+      message:
+        `Route not found: ${req.method} ${req.originalUrl}`,
 
-    hint: "Check API prefix (/api/v1) and route registration.",
-  });
-});
+      hint:
+        "Check API prefix (/api/v1) and route registration.",
+    });
+  }
+);
 
 export default app;

@@ -27,25 +27,63 @@ export const getSubscription = async (
         const subscription =
             await getUserSubscription(req.userId);
 
+        /**
+         * No subscription found.
+         * Return FREE limits.
+         */
         if (!subscription) {
             return res.status(200).json({
                 success: true,
                 subscription: null,
-                limits: null,
+                limits: PLANS.FREE,
                 canResume: false,
             });
         }
 
+        /**
+         * A subscription is only considered active
+         * if:
+         *
+         * 1. Its status is ACTIVE
+         * 2. It has no expiration date OR
+         *    the expiration date is still in the future.
+         */
+        const isActive =
+            subscription.status === "ACTIVE" &&
+            (
+                !subscription.expiresAt ||
+                subscription.expiresAt > new Date()
+            );
+
+        /**
+         * Return the subscription's actual plan
+         * only while it is active.
+         *
+         * Expired/cancelled subscriptions fall back
+         * to FREE limits.
+         */
+        const limits = isActive
+            ? PLANS[
+            subscription.plan as keyof typeof PLANS
+            ]
+            : PLANS.FREE;
+
+        /**
+         * Users can only resume a subscription that:
+         *
+         * - Is currently ACTIVE
+         * - Was scheduled for cancellation
+         * - Has not expired
+         */
+        const canResume =
+            isActive &&
+            subscription.cancelAtPeriodEnd === true;
+
         return res.status(200).json({
             success: true,
             subscription,
-            limits:
-                PLANS[
-                subscription.plan as keyof typeof PLANS
-                ],
-            canResume:
-                subscription.status === "ACTIVE" &&
-                subscription.cancelAtPeriodEnd === true,
+            limits,
+            canResume,
         });
     } catch (error) {
         console.error(
@@ -72,7 +110,7 @@ export const getSubscription = async (
  * }
  *
  * immediate = false (default)
- *  - User keeps access until endsAt.
+ *  - User keeps access until expiresAt.
  *  - User cannot purchase another subscription.
  *  - User may resume before expiry.
  *
@@ -111,7 +149,11 @@ export const cancelSubscription = async (
             canResume:
                 !immediate &&
                 subscription.status === "ACTIVE" &&
-                subscription.cancelAtPeriodEnd === true,
+                subscription.cancelAtPeriodEnd === true &&
+                (
+                    !subscription.expiresAt ||
+                    subscription.expiresAt > new Date()
+                ),
         });
     } catch (error: any) {
         console.error(

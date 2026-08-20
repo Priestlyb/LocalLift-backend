@@ -9,11 +9,23 @@ import {
 
 import requireSubscription from "../middleware/requireSubscription.middleware";
 
+import {
+  aiGenerationLimiter,
+} from "../middleware/rateLimit.middleware";
+
 const router = Router();
 
 /**
  * Generate AI content.
- * Requires an active subscription.
+ *
+ * Requires:
+ * - Authentication
+ * - CUSTOMER / CUSTOMER_STAFF / ADMIN role
+ * - Active subscription
+ * - AI generation rate limit
+ *
+ * The AI generation limiter protects expensive
+ * AI provider requests from being spammed.
  */
 router.post(
   "/generate",
@@ -24,11 +36,19 @@ router.post(
     "CUSTOMER_STAFF"
   ),
   requireSubscription,
+  aiGenerationLimiter,
   contentController.generate
 );
 
 /**
  * Get all generated content.
+ *
+ * Protected by:
+ * - Authentication
+ * - Authorization
+ *
+ * The global API rate limiter in app.ts
+ * also protects this endpoint.
  */
 router.get(
   "/history",

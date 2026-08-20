@@ -26,6 +26,7 @@ export const getActiveSubscription = async (
         subscription.expiresAt <= new Date()
     ) {
         subscription.status = "EXPIRED";
+        subscription.cancelAtPeriodEnd = false;
 
         await subscription.save();
 
@@ -55,11 +56,34 @@ export const hasActiveSubscription = async (
 /**
  * Returns the user's subscription,
  * regardless of status.
+ *
+ * Automatically marks an expired ACTIVE
+ * subscription as EXPIRED before returning it.
  */
 export const getSubscription = async (
     userId: string
 ) => {
-    return Subscription.findOne({
+    const subscription = await Subscription.findOne({
         user: userId,
     });
+
+    if (!subscription) {
+        return null;
+    }
+
+    /**
+     * Automatically expire stale subscriptions.
+     */
+    if (
+        subscription.status === "ACTIVE" &&
+        subscription.expiresAt &&
+        subscription.expiresAt <= new Date()
+    ) {
+        subscription.status = "EXPIRED";
+        subscription.cancelAtPeriodEnd = false;
+
+        await subscription.save();
+    }
+
+    return subscription;
 };

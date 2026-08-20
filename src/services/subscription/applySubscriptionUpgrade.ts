@@ -1,10 +1,15 @@
 import Subscription, {
     SubscriptionPlan,
 } from "../../models/Subscription";
+
 import { IPayment } from "../../models/Payment";
+
 import entitlementService from "./entitlement.service";
 
-const PLAN_ORDER: Record<SubscriptionPlan, number> = {
+const PLAN_ORDER: Record<
+    SubscriptionPlan,
+    number
+> = {
     FREE: 0,
     STARTER: 1,
     GROWTH: 2,
@@ -17,7 +22,9 @@ const addMonths = (
 ): Date => {
     const result = new Date(date);
 
-    result.setMonth(result.getMonth() + months);
+    result.setMonth(
+        result.getMonth() + months
+    );
 
     return result;
 };
@@ -26,26 +33,38 @@ const isUpgrade = (
     current: SubscriptionPlan,
     incoming: SubscriptionPlan
 ) => {
-    return PLAN_ORDER[incoming] > PLAN_ORDER[current];
+    return (
+        PLAN_ORDER[incoming] >
+        PLAN_ORDER[current]
+    );
 };
 
 /**
- * Applies a successful payment to a user's subscription.
+ * Applies a successful payment to a user's
+ * subscription.
  *
  * Handles:
+ *
  * - First subscription
- * - Renewal of the same plan
+ * - Renewal of active same plan
+ * - Renewal of expired same plan
  * - Immediate upgrades
+ * - Reactivation after cancellation
  * - Duplicate payment protection
- * - Clears scheduled downgrades after upgrade
+ * - Clears scheduled downgrades
  */
 export const applySubscriptionUpgrade = async (
     payment: IPayment
 ) => {
     const now = new Date();
 
+    /**
+     * Validate plan.
+     */
     if (
-        !entitlementService.isValidPlan(payment.plan)
+        !entitlementService.isValidPlan(
+            payment.plan
+        )
     ) {
         throw new Error(
             `Invalid subscription plan: ${payment.plan}`
@@ -57,13 +76,18 @@ export const applySubscriptionUpgrade = async (
             payment.plan
         );
 
+    /**
+     * Find existing subscription.
+     */
     const existing =
         await Subscription.findOne({
             user: payment.user,
         });
 
     /**
-     * Prevent duplicate processing
+     * ---------------------------------------
+     * DUPLICATE PAYMENT PROTECTION
+     * ---------------------------------------
      */
     if (
         existing?.lastPaymentReference ===
@@ -107,6 +131,8 @@ export const applySubscriptionUpgrade = async (
 
                 cancelledAt: null,
 
+                cancelAtPeriodEnd: false,
+
                 lastPaymentReference:
                     payment.reference,
             });
@@ -120,25 +146,75 @@ export const applySubscriptionUpgrade = async (
 
     /**
      * ---------------------------------------
-     * ACTIVE SUBSCRIPTION
+     * EXISTING SUBSCRIPTION
      * ---------------------------------------
      */
-
     const subscription = existing;
 
-    const active =
-        subscription.expiresAt &&
-        subscription.expiresAt > now;
+    const isActive =
+        subscription.status === "ACTIVE" &&
+        (
+            !subscription.expiresAt ||
+            subscription.expiresAt > now
+        );
 
     /**
-     * Same plan purchased again.
-     * Extend expiry.
+     * ---------------------------------------
+     * EXPIRED SUBSCRIPTION
+     * ---------------------------------------
+     *
+     * The old plan remains in the database,
+     * but purchasing the same plan again
+     * reactivates it as a new billing period.
+     */
+    if (!isActive) {
+        subscription.plan = payment.plan;
+
+        subscription.status = "ACTIVE";
+
+        subscription.startsAt = now;
+
+        subscription.expiresAt = addMonths(
+            now,
+            durationMonths
+        );
+
+        subscription.durationMonths =
+            durationMonths;
+
+        subscription.cancelledAt = null;
+
+        subscription.cancelAtPeriodEnd =
+            false;
+
+        subscription.autoRenew = true;
+
+        subscription.nextPlan = null;
+
+        subscription.changeAtRenewal = false;
+
+        subscription.lastPaymentReference =
+            payment.reference;
+
+        await subscription.save();
+
+        console.log(
+            `[SUBSCRIPTION] Reactivated ${payment.plan} for ${payment.user} until ${subscription.expiresAt?.toISOString()}`
+        );
+
+        return subscription;
+    }
+
+    /**
+     * ---------------------------------------
+     * ACTIVE SAME-PLAN RENEWAL
+     * ---------------------------------------
      */
     if (
-        active &&
         subscription.plan === payment.plan
     ) {
-        const currentExpiry = subscription.expiresAt!;
+        const currentExpiry =
+            subscription.expiresAt ?? now;
 
         subscription.expiresAt = addMonths(
             currentExpiry,
@@ -151,6 +227,9 @@ export const applySubscriptionUpgrade = async (
         subscription.status = "ACTIVE";
 
         subscription.cancelledAt = null;
+
+        subscription.cancelAtPeriodEnd =
+            false;
 
         subscription.autoRenew = true;
 
@@ -167,17 +246,18 @@ export const applySubscriptionUpgrade = async (
         await subscription.save();
 
         console.log(
-            `[SUBSCRIPTION] Renewed ${payment.plan} until ${subscription.expiresAt.toISOString()}`
+            `[SUBSCRIPTION] Renewed ${payment.plan} until ${subscription.expiresAt?.toISOString()}`
         );
 
         return subscription;
     }
 
     /**
-     * Immediate upgrade.
+     * ---------------------------------------
+     * ACTIVE UPGRADE
+     * ---------------------------------------
      */
     if (
-        active &&
         isUpgrade(
             subscription.plan,
             payment.plan
@@ -192,19 +272,27 @@ export const applySubscriptionUpgrade = async (
 
         subscription.cancelledAt = null;
 
+        subscription.cancelAtPeriodEnd =
+            false;
+
         subscription.autoRenew = true;
 
         subscription.lastPaymentReference =
             payment.reference;
 
         /**
-         * Keep current billing cycle,
-         * then extend by purchased duration.
+         * Keep the existing expiration date
+         * for the upgrade.
+         *
+         * If you want upgrades to add time,
+         * this can be changed later.
          */
-        subscription.expiresAt
+        subscription.expiresAt =
+            subscription.expiresAt;
 
         /**
-         * Upgrade overrides any scheduled downgrade.
+         * Upgrade overrides scheduled
+         * downgrade.
          */
         subscription.nextPlan = null;
 
@@ -219,6 +307,14 @@ export const applySubscriptionUpgrade = async (
         return subscription;
     }
 
+    /**
+     * ---------------------------------------
+     * FALLBACK
+     * ---------------------------------------
+     *
+     * This handles any remaining valid
+     * subscription transition.
+     */
     subscription.plan = payment.plan;
 
     subscription.status = "ACTIVE";
@@ -234,6 +330,8 @@ export const applySubscriptionUpgrade = async (
         durationMonths;
 
     subscription.cancelledAt = null;
+
+    subscription.cancelAtPeriodEnd = false;
 
     subscription.autoRenew = true;
 
