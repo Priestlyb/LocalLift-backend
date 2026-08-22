@@ -109,8 +109,12 @@ app.set(
  * CORS
  * ==========================================
  *
- * Only explicitly configured origins
- * are allowed.
+ * Browser origins are restricted to explicitly
+ * configured CLIENT_URL values.
+ *
+ * Native/mobile applications generally do not
+ * send an Origin header, so requests without an
+ * Origin header are allowed.
  */
 
 const configuredClientUrls =
@@ -136,22 +140,6 @@ const allowedOrigins = IS_PRODUCTION
     ]),
   ];
 
-/**
- * In production, fail startup if no
- * frontend origin has been configured.
- *
- * This prevents accidentally deploying
- * an API with an incomplete CORS policy.
- */
-if (
-  IS_PRODUCTION &&
-  allowedOrigins.length === 0
-) {
-  throw new Error(
-    "CLIENT_URL must be configured in production."
-  );
-}
-
 const corsOptions: CorsOptions = {
   origin: (
     origin,
@@ -161,7 +149,8 @@ const corsOptions: CorsOptions = {
      * Requests without an Origin header
      * can come from:
      *
-     * - Mobile/native applications
+     * - React Native / Expo
+     * - Native mobile applications
      * - Server-to-server requests
      * - CLI tools
      * - Postman
@@ -175,6 +164,10 @@ const corsOptions: CorsOptions = {
       );
     }
 
+    /**
+     * Browser requests must use an
+     * explicitly allowed origin.
+     */
     if (
       allowedOrigins.includes(origin)
     ) {
@@ -229,17 +222,8 @@ const corsOptions: CorsOptions = {
 /**
  * Apply CORS globally.
  *
- * IMPORTANT:
- *
- * Do NOT add:
- *
- * app.options("*", ...)
- *
- * Newer Express/path-to-regexp versions
- * reject "*" as a route pattern.
- *
- * The cors middleware handles preflight
- * requests automatically.
+ * Native mobile requests without an Origin
+ * header are allowed by the origin callback.
  */
 app.use(
   cors(corsOptions)
