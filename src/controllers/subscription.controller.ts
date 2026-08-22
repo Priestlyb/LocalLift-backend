@@ -11,13 +11,29 @@ import {
 } from "../services/subscription/subscription.service";
 
 /**
+ * ==========================================
  * GET CURRENT SUBSCRIPTION
+ * ==========================================
+ *
+ * GET /api/v1/subscription
+ *
+ * Returns:
+ * - Current subscription
+ * - Current plan limits
+ * - Current usage
+ * - Whether the subscription can be resumed
  */
 export const getSubscription = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
+        /**
+         * --------------------------------------
+         * AUTHENTICATION
+         * --------------------------------------
+         */
+
         if (!req.userId) {
             return res.status(401).json({
                 success: false,
@@ -25,17 +41,31 @@ export const getSubscription = async (
             });
         }
 
+        /**
+         * --------------------------------------
+         * GET SUBSCRIPTION
+         * --------------------------------------
+         */
+
         const subscription =
-            await getUserSubscription(req.userId);
+            await getUserSubscription(
+                req.userId
+            );
 
         /**
-         * No subscription found.
-         * Return FREE limits.
+         * --------------------------------------
+         * NO SUBSCRIPTION
+         * --------------------------------------
+         *
+         * Users without a subscription are
+         * automatically treated as FREE.
          */
+
         if (!subscription) {
             return res.status(200).json({
                 success: true,
                 subscription: null,
+                plan: "FREE",
                 limits: PLANS.FREE,
                 usage: null,
                 canResume: false,
@@ -43,41 +73,47 @@ export const getSubscription = async (
         }
 
         /**
-         * A subscription is only considered active
-         * if:
-         *
-         * 1. Its status is ACTIVE
-         * 2. It has no expiration date OR
-         *    the expiration date is still in the future.
+         * --------------------------------------
+         * DETERMINE ACTIVE STATUS
+         * --------------------------------------
          */
+
+        const now = new Date();
+
         const isActive =
             subscription.status === "ACTIVE" &&
             (
                 !subscription.expiresAt ||
-                subscription.expiresAt > new Date()
+                subscription.expiresAt > now
             );
 
         /**
-         * Return the subscription's actual plan
-         * only while it is active.
+         * --------------------------------------
+         * EFFECTIVE PLAN
+         * --------------------------------------
          *
-         * Expired/cancelled subscriptions fall back
-         * to FREE limits.
+         * Expired/cancelled subscriptions should
+         * not retain paid-plan entitlements.
          */
-        const limits = isActive
-            ? PLANS[
-            subscription.plan as keyof typeof PLANS
-            ]
-            : PLANS.FREE;
+
+        const effectivePlan = isActive
+            ? subscription.plan
+            : "FREE";
+
+        const limits =
+            PLANS[
+            effectivePlan as keyof typeof PLANS
+            ];
 
         /**
-         * Get current usage.
+         * --------------------------------------
+         * GET USAGE
+         * --------------------------------------
          *
-         * UsageService handles:
-         * - Creating the usage record if needed
-         * - Resetting usage when the billing cycle changes
-         * - Returning the current usage
+         * Only active paid subscriptions need
+         * usage tracking here.
          */
+
         const usage = isActive
             ? await usageService.getUsage(
                 req.userId
@@ -85,64 +121,92 @@ export const getSubscription = async (
             : null;
 
         /**
-         * Users can only resume a subscription that:
-         *
-         * - Is currently ACTIVE
-         * - Was scheduled for cancellation
-         * - Has not expired
+         * --------------------------------------
+         * CAN RESUME
+         * --------------------------------------
          */
+
         const canResume =
             isActive &&
-            subscription.cancelAtPeriodEnd === true;
+            subscription.cancelAtPeriodEnd ===
+            true;
+
+        /**
+         * --------------------------------------
+         * RESPONSE
+         * --------------------------------------
+         */
 
         return res.status(200).json({
             success: true,
+
             subscription,
+
+            plan: effectivePlan,
+
             limits,
+
             usage,
+
             canResume,
         });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error(
             "Get Subscription Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
         return res.status(500).json({
             success: false,
             message:
-                error?.message ??
-                "Server Error",
+                "Failed to fetch subscription.",
         });
     }
 };
 
 /**
- * CANCEL SUBSCRIPTION
+ * ==========================================
+ * GET SUBSCRIPTION USAGE
+ * ==========================================
  *
- * By default this schedules the cancellation
- * for the end of the current billing cycle.
+ * GET /api/v1/subscription/usage
  *
- * Body:
- * {
- *   "immediate": true
- * }
- *
- * immediate = false (default)
- *  - User keeps access until expiresAt.
- *  - User cannot purchase another subscription.
- *  - User may resume before expiry.
- *
- * immediate = true
- *  - Subscription ends immediately.
- *  - Access is revoked.
- *  - User may purchase another subscription immediately.
+ * Returns:
+ * - Current plan
+ * - Current subscription status
+ * - Image generation limit
+ * - Used image generations
+ * - Remaining image generations
+ * - Expiration date
  */
-export const cancelSubscription = async (
+/**
+ * ==========================================
+ * GET SUBSCRIPTION USAGE
+ * ==========================================
+ *
+ * GET /api/v1/subscription/usage
+ *
+ * Returns:
+ * - Current plan
+ * - Current subscription status
+ * - Image generation limit
+ * - Used image generations
+ * - Remaining image generations
+ * - Expiration date
+ */
+export const getSubscriptionUsage = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
+        /**
+         * --------------------------------------
+         * AUTHENTICATION
+         * --------------------------------------
+         */
+
         if (!req.userId) {
             return res.status(401).json({
                 success: false,
@@ -150,8 +214,260 @@ export const cancelSubscription = async (
             });
         }
 
+        /**
+         * --------------------------------------
+         * GET SUBSCRIPTION
+         * --------------------------------------
+         */
+
+        const subscription =
+            await getUserSubscription(
+                req.userId
+            );
+
+        /**
+         * --------------------------------------
+         * NO SUBSCRIPTION
+         * --------------------------------------
+         *
+         * Users without a subscription are
+         * treated as FREE.
+         */
+
+        if (!subscription) {
+            const freeLimits =
+                PLANS.FREE;
+
+            const imageLimit =
+                freeLimits.limits
+                    .imageGenerations;
+
+            return res.status(200).json({
+                success: true,
+
+                plan: "FREE",
+
+                status: "ACTIVE",
+
+                limits: {
+                    imageGenerations:
+                        imageLimit,
+
+                    maxResolution:
+                        freeLimits.limits
+                            .maxResolution,
+                },
+
+                usage: null,
+
+                usedImages: 0,
+
+                remainingImages:
+                    imageLimit,
+
+                expiresAt: null,
+
+                isActive: true,
+            });
+        }
+
+        /**
+         * --------------------------------------
+         * DETERMINE ACTIVE STATUS
+         * --------------------------------------
+         */
+
+        const now = new Date();
+
+        const isActive =
+            subscription.status === "ACTIVE" &&
+            (
+                !subscription.expiresAt ||
+                subscription.expiresAt > now
+            );
+
+        /**
+         * --------------------------------------
+         * EFFECTIVE PLAN
+         * --------------------------------------
+         *
+         * Expired/cancelled subscriptions
+         * receive FREE entitlements.
+         */
+
+        const effectivePlan = isActive
+            ? subscription.plan
+            : "FREE";
+
+        const planConfig =
+            PLANS[
+            effectivePlan as keyof typeof PLANS
+            ];
+
+        /**
+         * --------------------------------------
+         * GET USAGE
+         * --------------------------------------
+         */
+
+        const usage = isActive
+            ? await usageService.getUsage(
+                req.userId
+            )
+            : null;
+
+        /**
+         * --------------------------------------
+         * IMAGE USAGE
+         * --------------------------------------
+         *
+         * Usage model field:
+         *
+         * imageGenerationsUsed
+         */
+
+        const usedImages =
+            usage?.imageGenerationsUsed ?? 0;
+
+        /**
+         * --------------------------------------
+         * IMAGE LIMIT
+         * --------------------------------------
+         */
+
+        const imageLimit =
+            planConfig.limits
+                .imageGenerations;
+
+        /**
+         * --------------------------------------
+         * REMAINING IMAGES
+         * --------------------------------------
+         */
+
+        const remainingImages =
+            Math.max(
+                imageLimit - usedImages,
+                0
+            );
+
+        /**
+         * --------------------------------------
+         * RESPONSE
+         * --------------------------------------
+         */
+
+        return res.status(200).json({
+            success: true,
+
+            plan: effectivePlan,
+
+            status:
+                isActive
+                    ? "ACTIVE"
+                    : subscription.status,
+
+            limits: {
+                imageGenerations:
+                    imageLimit,
+
+                maxResolution:
+                    planConfig.limits
+                        .maxResolution,
+            },
+
+            usage,
+
+            usedImages,
+
+            remainingImages,
+
+            expiresAt:
+                isActive
+                    ? subscription.expiresAt
+                    : null,
+
+            isActive,
+        });
+    } catch (error: unknown) {
+        console.error(
+            "Get Subscription Usage Error:",
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
+        );
+
+        return res.status(500).json({
+            success: false,
+            message:
+                "Failed to fetch subscription usage.",
+        });
+    }
+};
+
+/**
+ * ==========================================
+ * CANCEL SUBSCRIPTION
+ * ==========================================
+ *
+ * POST /api/v1/subscription/cancel
+ *
+ * Body:
+ *
+ * {
+ *   "immediate": true
+ * }
+ *
+ * immediate = false/default:
+ * - Subscription remains active until expiry.
+ * - User can resume before expiry.
+ *
+ * immediate = true:
+ * - Subscription ends immediately.
+ * - Paid access is revoked.
+ * - User can subscribe again.
+ */
+export const cancelSubscription = async (
+    req: AuthRequest,
+    res: Response
+) => {
+    try {
+        /**
+         * --------------------------------------
+         * AUTHENTICATION
+         * --------------------------------------
+         */
+
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized",
+            });
+        }
+
+        /**
+         * --------------------------------------
+         * VALIDATE REQUEST BODY
+         * --------------------------------------
+         *
+         * Only accept an actual boolean.
+         * This prevents values such as:
+         *
+         * "true"
+         * 1
+         * "false"
+         *
+         * from being interpreted unexpectedly.
+         */
+
         const immediate =
             req.body?.immediate === true;
+
+        /**
+         * --------------------------------------
+         * CANCEL SUBSCRIPTION
+         * --------------------------------------
+         */
 
         const subscription =
             await cancelUserSubscription(
@@ -159,32 +475,55 @@ export const cancelSubscription = async (
                 immediate
             );
 
+        /**
+         * --------------------------------------
+         * CAN RESUME
+         * --------------------------------------
+         */
+
+        const now = new Date();
+
+        const canResume =
+            !immediate &&
+            subscription.status === "ACTIVE" &&
+            subscription.cancelAtPeriodEnd ===
+            true &&
+            (
+                !subscription.expiresAt ||
+                subscription.expiresAt > now
+            );
+
+        /**
+         * --------------------------------------
+         * RESPONSE
+         * --------------------------------------
+         */
+
         return res.status(200).json({
             success: true,
+
             message: immediate
                 ? "Subscription cancelled immediately. You may subscribe again at any time."
                 : "Subscription will remain active until the end of your current billing period. You can resume it anytime before it expires.",
+
             subscription,
-            canResume:
-                !immediate &&
-                subscription.status === "ACTIVE" &&
-                subscription.cancelAtPeriodEnd === true &&
-                (
-                    !subscription.expiresAt ||
-                    subscription.expiresAt > new Date()
-                ),
+
+            canResume,
         });
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error(
             "Cancel Subscription Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
         return res.status(400).json({
             success: false,
             message:
-                error?.message ??
-                "Failed to cancel subscription",
+                error instanceof Error
+                    ? error.message
+                    : "Failed to cancel subscription.",
         });
     }
 };

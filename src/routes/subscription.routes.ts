@@ -7,19 +7,26 @@ import {
 
 import {
     getSubscription,
+    getSubscriptionUsage,
     cancelSubscription,
 } from "../controllers/subscription.controller";
 
 const router = Router();
 
 /**
- * GET CURRENT SUBSCRIPTION + USAGE
+ * ==========================================
+ * GET CURRENT SUBSCRIPTION
+ * ==========================================
+ *
+ * GET /api/v1/subscription
  *
  * Returns:
  * - Current subscription
- * - Current plan limits
+ * - Current plan
+ * - Plan limits
  * - Current usage
- * - Whether the subscription can be resumed
+ * - Subscription status
+ * - Cancellation information
  */
 router.get(
     "/",
@@ -29,7 +36,33 @@ router.get(
 );
 
 /**
+ * ==========================================
+ * GET SUBSCRIPTION USAGE
+ * ==========================================
+ *
+ * GET /api/v1/subscription/usage
+ *
+ * Returns:
+ * - Current plan
+ * - Image generation limit
+ * - Used image generations
+ * - Remaining image generations
+ * - Subscription status
+ * - Expiration date
+ */
+router.get(
+    "/usage",
+    protect,
+    authorize("CUSTOMER"),
+    getSubscriptionUsage
+);
+
+/**
+ * ==========================================
  * CANCEL SUBSCRIPTION
+ * ==========================================
+ *
+ * POST /api/v1/subscription/cancel
  *
  * Body:
  * {
@@ -42,7 +75,7 @@ router.get(
  *
  * immediate = true:
  * - Subscription ends immediately
- * - Access to paid features is revoked
+ * - Paid feature access is revoked
  * - User can subscribe again
  */
 router.post(
