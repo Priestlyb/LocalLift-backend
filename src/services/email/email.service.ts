@@ -249,4 +249,88 @@ export class EmailService {
             `,
         });
     }
+
+    /**
+     * Send staff invitation email.
+     */
+    static async sendStaffInvitationEmail(
+        staffName: string,
+        staffEmail: string,
+        ownerName: string,
+        invitationUrl: string
+    ) {
+        await resend.emails.send({
+            from: process.env.EMAIL_FROM!,
+            to: staffEmail,
+            subject: `${ownerName} invited you to join LocalLift`,
+            html: `
+                <div
+                    style="
+                        font-family: Arial, Helvetica, sans-serif;
+                        max-width: 600px;
+                        margin: 0 auto;
+                        padding: 24px;
+                        color: #333;
+                    "
+                >
+                    <h2 style="color:#2563EB;">
+                        You've been invited to LocalLift
+                    </h2>
+
+                    <p>
+                        Hi <strong>${staffName}</strong>,
+                    </p>
+
+                    <p>
+                        <strong>${ownerName}</strong> has invited you
+                        to join their LocalLift business account as a
+                        staff member.
+                    </p>
+
+                    <p>
+                        Click the button below to accept the invitation
+                        and create your staff account.
+                    </p>
+
+                    <div style="text-align:center; margin:32px 0;">
+                        <a
+                            href="${invitationUrl}"
+                            style="
+                                display:inline-block;
+                                background:#2563EB;
+                                color:#ffffff;
+                                text-decoration:none;
+                                padding:14px 24px;
+                                border-radius:8px;
+                                font-weight:bold;
+                            "
+                        >
+                            Accept Invitation
+                        </a>
+                    </div>
+
+                    <p>
+                        This invitation will expire in
+                        <strong>24 hours</strong>.
+                    </p>
+
+                    <p>
+                        If you were not expecting this invitation,
+                        you can safely ignore this email.
+                    </p>
+
+                    <hr style="margin:32px 0;" />
+
+                    <p
+                        style="
+                            font-size:14px;
+                            color:#6B7280;
+                        "
+                    >
+                        — The LocalLift Team
+                    </p>
+                </div>
+            `,
+        });
+    }
 }

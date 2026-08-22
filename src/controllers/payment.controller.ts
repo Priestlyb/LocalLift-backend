@@ -10,9 +10,14 @@ import { PLANS } from "../constants/plans";
 import { PaymentService } from "../services/payment/payment.service";
 
 import {
-    PaymentProvider,
+    PaymentProvider as PaymentProviderName,
     PaymentPlan,
+    VerifiedWebhookPayload,
 } from "../types/payment.types";
+
+import {
+    PaymentProvider as PaymentProviderService,
+} from "../services/payment/payment.interface";
 
 import WebhookEvent from "../models/WebhookEvent";
 import { addPaymentJob } from "../queues/payment.queue";
@@ -25,7 +30,227 @@ import { applySubscriptionUpgrade } from "../services/subscription/applySubscrip
 import { schedulePlanChange } from "../services/subscription/schedulePlanChange";
 
 /**
+ * ==========================================
+ * CONSTANTS
+ * ==========================================
+ */
+
+const PAYMENT_REFERENCE_REGEX =
+    /^[A-Za-z0-9._:-]+$/;
+
+const MAX_PAYMENT_REFERENCE_LENGTH = 128;
+
+/**
+ * ==========================================
+ * HELPERS
+ * ==========================================
+ */
+
+/**
+ * Safely extract a single header value.
+ */
+const getHeaderValue = (
+    value:
+        | string
+        | string[]
+        | undefined
+): string | undefined => {
+    if (typeof value === "string") {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value[0];
+    }
+
+    return undefined;
+};
+
+/**
+ * Webhooks must be verified against the
+ * exact raw request body received from the
+ * payment provider.
+ *
+ * IMPORTANT:
+ *
+ * Your webhook routes must use express.raw()
+ * before this controller.
+ */
+const getRawWebhookBody = (
+    req: Request
+): Buffer => {
+    if (Buffer.isBuffer(req.body)) {
+        return req.body;
+    }
+
+    throw new Error(
+        "Webhook request body must be a raw Buffer."
+    );
+};
+
+/**
+ * Parse raw webhook JSON safely.
+ */
+const parseWebhookBody = (
+    rawBody: Buffer
+): unknown => {
+    try {
+        return JSON.parse(
+            rawBody.toString("utf8")
+        );
+    } catch {
+        throw new Error(
+            "Invalid webhook JSON payload."
+        );
+    }
+};
+
+/**
+ * Convert a normalized and verified webhook
+ * into a plain object compatible with:
+ *
+ * Record<string, unknown>
+ *
+ * This prevents storing class/object references
+ * directly in Mongoose.
+ */
+const serializeWebhookPayload = (
+    payload: VerifiedWebhookPayload
+): Record<string, unknown> => {
+    return {
+        event: payload.event,
+
+        reference:
+            payload.reference,
+
+        amount:
+            payload.amount,
+
+        status:
+            payload.status,
+
+        ...(payload.metadata
+            ? {
+                metadata:
+                    payload.metadata,
+            }
+            : {}),
+    };
+};
+
+/**
+ * Safely convert a provider paidAt value
+ * into a valid Date.
+ */
+const getSafePaidAt = (
+    value?: Date | string | null
+): Date => {
+    if (!value) {
+        return new Date();
+    }
+
+    const date =
+        value instanceof Date
+            ? value
+            : new Date(value);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return new Date();
+    }
+
+    return date;
+};
+
+/**
+ * Compare payment amounts.
+ *
+ * Payment amounts are stored in NGN in the
+ * application.
+ *
+ * Paystack converts kobo -> NGN inside
+ * PaystackService.
+ */
+const amountsMatch = (
+    expected: number,
+    received: number
+): boolean => {
+    if (
+        !Number.isFinite(expected) ||
+        !Number.isFinite(received)
+    ) {
+        return false;
+    }
+
+    return expected === received;
+};
+
+/**
+ * Validate payment reference.
+ */
+const isValidPaymentReference = (
+    reference: string
+): boolean => {
+    return (
+        reference.length > 0 &&
+        reference.length <=
+        MAX_PAYMENT_REFERENCE_LENGTH &&
+        PAYMENT_REFERENCE_REGEX.test(
+            reference
+        )
+    );
+};
+
+/**
+ * Safely resolve a provider service.
+ *
+ * PaymentProviderName is the database/provider
+ * name:
+ *
+ * "KORA" | "PAYSTACK"
+ *
+ * PaymentProviderService is the actual service
+ * interface containing:
+ *
+ * initializePayment()
+ * verifyPayment()
+ * parseWebhook()
+ * verifyWebhookSignature()
+ */
+const getPaymentProviderService = (
+    providerName: PaymentProviderName
+): PaymentProviderService => {
+    const provider =
+        PaymentService.getProvider(
+            providerName
+        ) as unknown as PaymentProviderService;
+
+    if (
+        !provider ||
+        typeof provider.initializePayment !==
+        "function" ||
+        typeof provider.verifyPayment !==
+        "function" ||
+        typeof provider.parseWebhook !==
+        "function" ||
+        typeof provider.verifyWebhookSignature !==
+        "function"
+    ) {
+        throw new Error(
+            `Invalid payment provider service for ${providerName}.`
+        );
+    }
+
+    return provider;
+};
+
+/**
+ * ==========================================
  * INITIALIZE PAYMENT
+ * ==========================================
  *
  * Handles:
  *
@@ -35,124 +260,237 @@ import { schedulePlanChange } from "../services/subscription/schedulePlanChange"
  *  - Downgrade -> scheduled
  *
  * EXPIRED / CANCELLED subscription
- *  - Same plan -> allowed (renewal)
- *  - Different plan -> allowed (new subscription)
+ *  - Same plan -> allowed
+ *  - Different plan -> allowed
  *
  * FREE subscription
- *  - Any paid plan -> payment required
- */
-/**
- * INITIALIZE PAYMENT
+ *  - Paid plan -> payment required
  */
 export const initializePayment = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
-        const {
-            provider,
-            plan,
-        }: {
-            provider: PaymentProvider;
-            plan: PaymentPlan;
-        } = req.body;
+        /**
+         * ---------------------------------------
+         * AUTHENTICATION
+         * ---------------------------------------
+         */
 
-        if (!provider || !plan) {
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Unauthorized",
+            });
+        }
+
+        /**
+         * ---------------------------------------
+         * INPUT VALIDATION
+         * ---------------------------------------
+         *
+         * Never trust:
+         *
+         * - amount
+         * - user ID
+         * - payment reference
+         *
+         * from the client.
+         */
+
+        const requestedProvider =
+            req.body?.provider;
+
+        const requestedPlan =
+            req.body?.plan;
+
+        if (
+            typeof requestedProvider !==
+            "string" ||
+            typeof requestedPlan !==
+            "string"
+        ) {
             return res.status(400).json({
                 success: false,
                 message:
-                    "Provider and plan are required",
+                    "Provider and plan are required.",
             });
         }
 
         if (
             !PaymentService.isSupportedProvider(
-                provider
+                requestedProvider
             )
         ) {
             return res.status(400).json({
                 success: false,
                 message:
-                    "Unsupported payment provider",
+                    "Unsupported payment provider.",
             });
         }
 
-        if (plan === "FREE") {
+        /**
+         * Only paid plans can reach this
+         * endpoint.
+         */
+        if (
+            requestedPlan !==
+            "STARTER" &&
+            requestedPlan !==
+            "GROWTH" &&
+            requestedPlan !== "PRO"
+        ) {
             return res.status(400).json({
                 success: false,
                 message:
-                    "FREE plan does not require payment",
+                    "Invalid payment plan.",
             });
         }
 
-        if (!req.userId) {
-            return res.status(401).json({
-                success: false,
-                message: "Unauthorized",
-            });
-        }
+        const providerName =
+            requestedProvider as PaymentProviderName;
 
-        const user = await User.findById(
-            req.userId
-        );
+        const paymentPlan =
+            requestedPlan as PaymentPlan;
+
+        /**
+         * ---------------------------------------
+         * USER
+         * ---------------------------------------
+         */
+
+        const user =
+            await User.findById(
+                req.userId
+            ).select("_id email");
 
         if (!user) {
             return res.status(404).json({
                 success: false,
-                message: "User not found",
+                message:
+                    "User not found.",
             });
         }
 
+        if (
+            typeof user.email !==
+            "string" ||
+            !user.email.trim()
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "A valid email address is required for payment.",
+            });
+        }
+
+        const email =
+            user.email.trim();
+
+        /**
+         * ---------------------------------------
+         * SERVER-SIDE PLAN CONFIGURATION
+         * ---------------------------------------
+         *
+         * NEVER trust amount from req.body.
+         */
+
         const planConfig =
-            PLANS[
-            plan as keyof typeof PLANS
-            ];
+            PLANS[paymentPlan];
 
         if (!planConfig) {
             return res.status(400).json({
                 success: false,
-                message: "Invalid plan",
+                message:
+                    "Invalid payment plan.",
+            });
+        }
+
+        const amount =
+            Number(planConfig.price);
+
+        if (
+            !Number.isFinite(amount) ||
+            !Number.isSafeInteger(amount) ||
+            amount <= 0
+        ) {
+            console.error(
+                "Invalid server-side payment amount.",
+                {
+                    plan:
+                        paymentPlan,
+                }
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Payment configuration error.",
             });
         }
 
         /**
          * ---------------------------------------
-         * GET CURRENT SUBSCRIPTION
+         * CALLBACK URL
          * ---------------------------------------
          */
+
+        const callbackUrl =
+            process.env
+                .PAYMENT_CALLBACK_URL;
+
+        if (
+            !callbackUrl ||
+            !/^https?:\/\//i.test(
+                callbackUrl
+            )
+        ) {
+            console.error(
+                "PAYMENT_CALLBACK_URL is not configured correctly."
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Payment callback configuration error.",
+            });
+        }
+
+        /**
+         * ---------------------------------------
+         * CURRENT SUBSCRIPTION
+         * ---------------------------------------
+         */
+
         const currentSubscription =
             await Subscription.findOne({
                 user: req.userId,
             });
 
-        /**
-         * Determine whether the existing
-         * subscription is actually active.
-         *
-         * An EXPIRED subscription should be
-         * treated as FREE for purchasing.
-         */
-        const now = new Date();
+        const now =
+            new Date();
 
-        const isCurrentlyActive =
+        let isCurrentlyActive =
             currentSubscription?.status ===
             "ACTIVE" &&
             (
                 !currentSubscription.expiresAt ||
-                currentSubscription.expiresAt > now
+                currentSubscription.expiresAt >
+                now
             );
 
         /**
-         * If the subscription is marked ACTIVE
-         * but the expiration date has passed,
-         * immediately mark it as EXPIRED.
+         * Normalize expired subscriptions.
          */
+
         if (
             currentSubscription &&
             currentSubscription.status ===
             "ACTIVE" &&
             currentSubscription.expiresAt &&
-            currentSubscription.expiresAt <= now
+            currentSubscription.expiresAt <=
+            now
         ) {
             currentSubscription.status =
                 "EXPIRED";
@@ -165,22 +503,21 @@ export const initializePayment = async (
 
             await currentSubscription.save();
 
+            isCurrentlyActive = false;
+
             console.log(
-                `[SUBSCRIPTION] Expired subscription ${currentSubscription._id}`
+                `[SUBSCRIPTION] Expired subscription ${String(
+                    currentSubscription._id
+                )}`
             );
         }
 
         /**
          * ---------------------------------------
-         * DETERMINE EFFECTIVE CURRENT PLAN
+         * EFFECTIVE CURRENT PLAN
          * ---------------------------------------
-         *
-         * Only an actually active subscription
-         * counts as the user's current plan.
-         *
-         * EXPIRED / CANCELLED / PAST_DUE
-         * subscriptions are treated as FREE.
          */
+
         const currentPlan: PaymentPlan =
             isCurrentlyActive &&
                 currentSubscription
@@ -190,14 +527,21 @@ export const initializePayment = async (
         console.log(
             "[SUBSCRIPTION] Payment initialization:",
             {
-                userId: req.userId,
-                requestedPlan: plan,
+                userId:
+                    req.userId,
+
+                requestedPlan:
+                    paymentPlan,
+
                 storedPlan:
                     currentSubscription?.plan,
+
                 storedStatus:
                     currentSubscription?.status,
+
                 effectiveCurrentPlan:
                     currentPlan,
+
                 isCurrentlyActive,
             }
         );
@@ -206,21 +550,12 @@ export const initializePayment = async (
          * ---------------------------------------
          * SAME PLAN
          * ---------------------------------------
-         *
-         * Only prevent payment if the user is
-         * ACTUALLY ACTIVE on that plan.
-         *
-         * This allows:
-         *
-         * GROWTH ACTIVE -> GROWTH
-         * ❌ blocked
-         *
-         * GROWTH EXPIRED -> GROWTH
-         * ✅ renewal allowed
          */
+
         if (
             isCurrentlyActive &&
-            currentPlan === plan
+            currentPlan ===
+            paymentPlan
         ) {
             return res.status(400).json({
                 success: false,
@@ -233,24 +568,19 @@ export const initializePayment = async (
          * ---------------------------------------
          * DOWNGRADE
          * ---------------------------------------
-         *
-         * Only schedule downgrades when the
-         * current subscription is actually active.
-         *
-         * An expired subscription should be
-         * treated as a fresh purchase instead.
          */
+
         if (
             isCurrentlyActive &&
             entitlementService.canDowngrade(
                 currentPlan,
-                plan
+                paymentPlan
             )
         ) {
             const subscription =
                 await schedulePlanChange(
                     req.userId,
-                    plan
+                    paymentPlan
                 );
 
             return res.status(200).json({
@@ -258,231 +588,510 @@ export const initializePayment = async (
                 scheduled: true,
                 subscription,
                 message:
-                    `Your plan will change to ${plan} when your current subscription ends.`,
+                    `Your plan will change to ${paymentPlan} when your current subscription ends.`,
             });
         }
 
         /**
          * ---------------------------------------
-         * PAYMENT CALLBACK
+         * PROVIDER SERVICE
          * ---------------------------------------
          */
-        const callbackUrl =
-            process.env.PAYMENT_CALLBACK_URL;
 
-        console.log(
-            "PAYMENT_CALLBACK_URL:",
-            callbackUrl
-        );
-
-        const paymentProvider =
-            PaymentService.getProvider(
-                provider
+        const providerService =
+            getPaymentProviderService(
+                providerName
             );
 
         /**
          * ---------------------------------------
-         * CANCEL EXISTING PENDING PAYMENT
+         * UNIQUE SERVER-GENERATED REFERENCE
          * ---------------------------------------
          */
-        const existingPayment =
-            await Payment.findOne({
-                user: req.userId,
-                provider,
-                plan,
-                status: "PENDING",
-            });
 
-        if (existingPayment) {
-            console.log(
-                "Cancelling stale payment:",
-                existingPayment.reference
-            );
-
-            existingPayment.status = "FAILED";
-
-            await existingPayment.save();
-        }
+        const reference =
+            `PAY-${crypto
+                .randomUUID()
+                .replace(/-/g, "")}`;
 
         /**
          * ---------------------------------------
          * CREATE PAYMENT
          * ---------------------------------------
+         *
+         * The server controls:
+         *
+         * - user
+         * - provider
+         * - reference
+         * - plan
+         * - amount
+         * - status
          */
-        const reference =
-            crypto.randomUUID();
 
-        await Payment.create({
-            user: req.userId,
-            provider,
-            reference,
-            plan,
-            amount: planConfig.price,
-            status: "PENDING",
-        });
+        const payment =
+            await Payment.create({
+                user:
+                    user._id,
 
-        /**
-         * ---------------------------------------
-         * INITIALIZE PROVIDER PAYMENT
-         * ---------------------------------------
-         */
-        const result =
-            await paymentProvider.initializePayment(
+                provider:
+                    providerName,
+
+                reference,
+
+                plan:
+                    paymentPlan,
+
+                amount,
+
+                status:
+                    "PENDING",
+
+                metadata: {
+                    userId:
+                        String(
+                            user._id
+                        ),
+
+                    plan:
+                        paymentPlan,
+                },
+            });
+
+        try {
+            /**
+             * -----------------------------------
+             * INITIALIZE PROVIDER PAYMENT
+             * -----------------------------------
+             */
+
+            const result =
+                await providerService.initializePayment(
+                    {
+                        email,
+
+                        amount,
+
+                        reference,
+
+                        callbackUrl,
+
+                        metadata: {
+                            userId:
+                                String(
+                                    user._id
+                                ),
+
+                            plan:
+                                paymentPlan,
+
+                            paymentId:
+                                String(
+                                    payment._id
+                                ),
+                        },
+                    }
+                );
+
+            if (
+                !result.authorizationUrl ||
+                typeof result.authorizationUrl !==
+                "string"
+            ) {
+                throw new Error(
+                    "Payment provider did not return a valid authorization URL."
+                );
+            }
+
+            /**
+             * -----------------------------------
+             * CANCEL OLDER PENDING PAYMENTS
+             * -----------------------------------
+             *
+             * Only cancel older payments after
+             * the new payment was successfully
+             * initialized.
+             */
+
+            await Payment.updateMany(
                 {
-                    email: user.email,
-                    amount: planConfig.price,
-                    reference,
-                    callbackUrl,
-                    metadata: {
-                        userId: req.userId,
-                        plan,
+                    user:
+                        user._id,
+
+                    provider:
+                        providerName,
+
+                    plan:
+                        paymentPlan,
+
+                    status:
+                        "PENDING",
+
+                    _id: {
+                        $ne:
+                            payment._id,
+                    },
+                },
+                {
+                    $set: {
+                        status:
+                            "CANCELLED",
                     },
                 }
             );
 
-        return res.status(200).json({
-            success: true,
-            provider,
-            plan,
-            reference,
-            authorizationUrl:
-                result.authorizationUrl,
-        });
+            /**
+             * -----------------------------------
+             * SAFE RESPONSE
+             * -----------------------------------
+             */
+
+            return res.status(200).json({
+                success: true,
+
+                provider:
+                    providerName,
+
+                plan:
+                    paymentPlan,
+
+                reference,
+
+                authorizationUrl:
+                    result.authorizationUrl,
+            });
+        } catch (providerError) {
+            /**
+             * Provider initialization failed.
+             *
+             * Do not leave the payment in
+             * PENDING forever.
+             */
+
+            try {
+                payment.status =
+                    "FAILED";
+
+                await payment.save();
+            } catch (saveError) {
+                console.error(
+                    "Failed to mark payment initialization as failed:",
+                    saveError
+                );
+            }
+
+            throw providerError;
+        }
     } catch (error) {
         console.error(
             "Initialize Payment Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
         return res.status(500).json({
             success: false,
             message:
-                "Failed to initialize payment",
+                "Failed to initialize payment.",
         });
     }
 };
 
 /**
+ * ==========================================
  * VERIFY PAYMENT
+ * ==========================================
  */
 export const verifyPayment = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
-        const reference = String(
-            req.params.reference
-        );
+        /**
+         * ---------------------------------------
+         * AUTHENTICATION
+         * ---------------------------------------
+         */
+
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Unauthorized",
+            });
+        }
 
         /**
-         * Find payment belonging to
-         * the authenticated user.
+         * ---------------------------------------
+         * REFERENCE VALIDATION
+         * ---------------------------------------
          */
+
+        const reference =
+            String(
+                req.params.reference ??
+                ""
+            ).trim();
+
+        if (
+            !isValidPaymentReference(
+                reference
+            )
+        ) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Invalid payment reference.",
+            });
+        }
+
+        /**
+         * ---------------------------------------
+         * FIND USER PAYMENT
+         * ---------------------------------------
+         */
+
         const payment =
             await Payment.findOne({
                 reference,
-                user: req.userId,
+
+                user:
+                    req.userId,
             });
 
         if (!payment) {
             return res.status(404).json({
                 success: false,
-                message: "Payment not found",
+                message:
+                    "Payment not found.",
             });
         }
 
         /**
-         * Get provider.
+         * ---------------------------------------
+         * ALREADY SUCCESSFUL
+         * ---------------------------------------
+         *
+         * Payment finalization is idempotent.
          */
-        const provider =
-            PaymentService.getProvider(
+
+        if (
+            payment.status ===
+            "SUCCESS"
+        ) {
+            const subscription =
+                await applySubscriptionUpgrade(
+                    payment
+                );
+
+            return res.status(200).json({
+                success: true,
+
+                payment: {
+                    id:
+                        payment._id,
+
+                    reference:
+                        payment.reference,
+
+                    provider:
+                        payment.provider,
+
+                    plan:
+                        payment.plan,
+
+                    amount:
+                        payment.amount,
+
+                    status:
+                        payment.status,
+
+                    paidAt:
+                        payment.paidAt,
+
+                    createdAt:
+                        payment.createdAt,
+                },
+
+                subscription,
+            });
+        }
+
+        /**
+         * ---------------------------------------
+         * PROVIDER SERVICE
+         * ---------------------------------------
+         */
+
+        const providerService =
+            getPaymentProviderService(
                 payment.provider
             );
 
         /**
-         * Verify payment with provider.
+         * ---------------------------------------
+         * VERIFY DIRECTLY WITH PROVIDER
+         * ---------------------------------------
          */
+
         const verification =
-            await provider.verifyPayment(
+            await providerService.verifyPayment(
                 reference
             );
+
+        /**
+         * ---------------------------------------
+         * PROVIDER SUCCESS CHECK
+         * ---------------------------------------
+         */
 
         if (!verification.success) {
             return res.status(400).json({
                 success: false,
                 message:
-                    "Payment verification failed",
-                verification,
+                    "Payment verification failed.",
             });
         }
 
-        /**
-         * Make sure payment was actually successful.
-         */
         if (
-            verification.status?.toLowerCase() !==
+            typeof verification.status !==
+            "string" ||
+            verification.status
+                .toLowerCase() !==
             "success"
         ) {
             return res.status(400).json({
                 success: false,
                 message:
-                    "Payment not successful",
-                verification,
+                    "Payment was not successful.",
             });
         }
 
         /**
-         * Mark payment as successful.
+         * ---------------------------------------
+         * AMOUNT VERIFICATION
+         * ---------------------------------------
+         *
+         * This is extremely important.
+         *
+         * Never trust provider success alone.
          */
-        if (payment.status !== "SUCCESS") {
-            payment.status = "SUCCESS";
 
-            payment.paidAt = new Date(
-                verification.paidAt ??
-                Date.now()
+        if (
+            !amountsMatch(
+                payment.amount,
+                verification.amount
+            )
+        ) {
+            console.error(
+                "Payment amount mismatch.",
+                {
+                    reference:
+                        payment.reference,
+
+                    provider:
+                        payment.provider,
+
+                    expected:
+                        payment.amount,
+
+                    received:
+                        verification.amount,
+                }
             );
 
-            await payment.save();
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Payment amount verification failed.",
+            });
         }
 
         /**
-         * Apply the subscription.
-         *
-         * This handles both:
-         *
-         * - New subscriptions
-         * - Renewals
-         * - Upgrades
+         * ---------------------------------------
+         * FINALIZE PAYMENT
+         * ---------------------------------------
          */
+
+        payment.status =
+            "SUCCESS";
+
+        payment.paidAt =
+            getSafePaidAt(
+                verification.paidAt
+            );
+
+        await payment.save();
+
+        /**
+         * ---------------------------------------
+         * APPLY SUBSCRIPTION
+         * ---------------------------------------
+         */
+
         const subscription =
             await applySubscriptionUpgrade(
                 payment
             );
 
+        /**
+         * ---------------------------------------
+         * SAFE RESPONSE
+         * ---------------------------------------
+         */
+
         return res.status(200).json({
             success: true,
-            payment,
+
+            payment: {
+                id:
+                    payment._id,
+
+                reference:
+                    payment.reference,
+
+                provider:
+                    payment.provider,
+
+                plan:
+                    payment.plan,
+
+                amount:
+                    payment.amount,
+
+                status:
+                    payment.status,
+
+                paidAt:
+                    payment.paidAt,
+
+                createdAt:
+                    payment.createdAt,
+            },
+
             subscription,
-            verification,
         });
     } catch (error) {
         console.error(
             "Verify Payment Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
         return res.status(500).json({
             success: false,
             message:
-                "Failed to verify payment",
+                "Failed to verify payment.",
         });
     }
 };
 
 /**
- * PAYSTACK SUCCESS REDIRECT
- *
- * Used by the React Native WebView.
+ * ==========================================
+ * PAYMENT SUCCESS REDIRECT
+ * ==========================================
  */
 export const paymentSuccess = async (
     req: Request,
@@ -494,6 +1103,10 @@ export const paymentSuccess = async (
 <head>
     <title>Payment Successful</title>
     <meta charset="utf-8" />
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    />
 </head>
 <body style="
     font-family: Arial, sans-serif;
@@ -501,6 +1114,7 @@ export const paymentSuccess = async (
     justify-content:center;
     align-items:center;
     height:100vh;
+    margin:0;
     background:#F8FAFC;
 ">
     <div style="text-align:center;">
@@ -513,7 +1127,9 @@ export const paymentSuccess = async (
 };
 
 /**
- * PAYSTACK FAILED REDIRECT
+ * ==========================================
+ * PAYMENT FAILED REDIRECT
+ * ==========================================
  */
 export const paymentFailed = async (
     req: Request,
@@ -525,6 +1141,10 @@ export const paymentFailed = async (
 <head>
     <title>Payment Failed</title>
     <meta charset="utf-8" />
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    />
 </head>
 <body style="
     font-family: Arial, sans-serif;
@@ -532,6 +1152,7 @@ export const paymentFailed = async (
     justify-content:center;
     align-items:center;
     height:100vh;
+    margin:0;
     background:#F8FAFC;
 ">
     <div style="text-align:center;">
@@ -544,166 +1165,408 @@ export const paymentFailed = async (
 };
 
 /**
+ * ==========================================
  * KORA WEBHOOK
+ * ==========================================
+ *
+ * IMPORTANT:
+ *
+ * The route must use:
+ *
+ * express.raw({
+ *     type: "application/json"
+ * })
+ *
+ * BEFORE this controller.
  */
 export const koraWebhook = async (
     req: Request,
     res: Response
 ) => {
     try {
-        const provider =
-            PaymentService.getProvider(
+        const providerService =
+            getPaymentProviderService(
                 "KORA"
             );
 
+        /**
+         * Preserve the exact raw request body.
+         */
         const rawBody =
-            req.body.toString("utf8");
+            getRawWebhookBody(req);
 
-        const payload =
-            await provider.parseWebhook(
-                JSON.parse(rawBody),
-                req.headers[
-                "x-korapay-signature"
-                ] as string
+        /**
+         * Parse JSON only after retaining
+         * the original raw body.
+         */
+        const rawPayload =
+            parseWebhookBody(
+                rawBody
             );
 
+        const signature =
+            getHeaderValue(
+                req.headers[
+                "x-korapay-signature"
+                ]
+            );
+
+        /**
+         * parseWebhook performs:
+         *
+         * 1. Signature verification
+         * 2. Payload validation
+         * 3. Event validation
+         * 4. Status validation
+         * 5. Payload normalization
+         */
+        const payload =
+            await providerService.parseWebhook(
+                rawPayload,
+                signature
+            );
+
+        /**
+         * Normalized status is always uppercase.
+         */
         if (
-            payload.status !== "success"
+            payload.status !==
+            "SUCCESS"
         ) {
-            return res.sendStatus(200);
+            return res.sendStatus(
+                200
+            );
         }
+
+        /**
+         * ---------------------------------------
+         * IDEMPOTENCY CHECK
+         * ---------------------------------------
+         */
 
         const exists =
             await WebhookEvent.findOne({
-                provider: "KORA",
+                provider:
+                    "KORA",
+
                 reference:
                     payload.reference,
-                event: payload.status,
-            });
+
+                event:
+                    payload.event,
+            }).select("_id");
 
         if (exists) {
-            return res.sendStatus(200);
+            return res.sendStatus(
+                200
+            );
         }
 
-        await WebhookEvent.create({
-            provider: "KORA",
-            reference:
-                payload.reference,
-            event: payload.status,
-            payload,
-            processed: false,
-        });
+        /**
+         * ---------------------------------------
+         * STORE VERIFIED WEBHOOK
+         * ---------------------------------------
+         */
 
+        try {
+            await WebhookEvent.create({
+                provider:
+                    "KORA",
+
+                reference:
+                    payload.reference,
+
+                event:
+                    payload.event,
+
+                payload:
+                    serializeWebhookPayload(
+                        payload
+                    ),
+
+                processed:
+                    false,
+
+                attempts:
+                    0,
+            });
+        } catch (error: any) {
+            /**
+             * Two identical webhooks may arrive
+             * at exactly the same time.
+             *
+             * A unique database index protects
+             * against duplicate processing.
+             */
+
+            if (
+                error?.code ===
+                11000
+            ) {
+                return res.sendStatus(
+                    200
+                );
+            }
+
+            throw error;
+        }
+
+        /**
+         * Queue only AFTER webhook persistence.
+         */
         await addPaymentJob(
             payload.reference
         );
 
-        return res.sendStatus(200);
+        return res.sendStatus(
+            200
+        );
     } catch (error) {
         console.error(
             "Kora Webhook Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
-        return res.sendStatus(500);
+        /**
+         * 500 allows Kora to retry.
+         */
+        return res.sendStatus(
+            500
+        );
     }
 };
 
 /**
+ * ==========================================
  * PAYSTACK WEBHOOK
+ * ==========================================
+ *
+ * IMPORTANT:
+ *
+ * The route must use:
+ *
+ * express.raw({
+ *     type: "application/json"
+ * })
+ *
+ * BEFORE this controller.
  */
 export const paystackWebhook = async (
     req: Request,
     res: Response
 ) => {
     try {
-        const provider =
-            PaymentService.getProvider(
+        const providerService =
+            getPaymentProviderService(
                 "PAYSTACK"
             );
 
+        /**
+         * Preserve exact raw body.
+         */
         const rawBody =
-            req.body.toString("utf8");
+            getRawWebhookBody(req);
 
-        const payload =
-            await provider.parseWebhook(
-                JSON.parse(rawBody),
-                req.headers[
-                "x-paystack-signature"
-                ] as string
+        const rawPayload =
+            parseWebhookBody(
+                rawBody
             );
 
+        const signature =
+            getHeaderValue(
+                req.headers[
+                "x-paystack-signature"
+                ]
+            );
+
+        /**
+         * Verify and normalize webhook.
+         */
+        const payload =
+            await providerService.parseWebhook(
+                rawPayload,
+                signature
+            );
+
+        /**
+         * Normalized successful Paystack
+         * webhooks have:
+         *
+         * event  = charge.success
+         * status = SUCCESS
+         */
         if (
-            payload.event !==
-            "charge.success"
+            payload.status !==
+            "SUCCESS"
         ) {
-            return res.sendStatus(200);
+            return res.sendStatus(
+                200
+            );
         }
+
+        /**
+         * ---------------------------------------
+         * IDEMPOTENCY CHECK
+         * ---------------------------------------
+         */
 
         const exists =
             await WebhookEvent.findOne({
-                provider: "PAYSTACK",
+                provider:
+                    "PAYSTACK",
+
                 reference:
                     payload.reference,
-                event: payload.event,
-            });
+
+                event:
+                    payload.event,
+            }).select("_id");
 
         if (exists) {
-            return res.sendStatus(200);
+            return res.sendStatus(
+                200
+            );
         }
 
-        await WebhookEvent.create({
-            provider: "PAYSTACK",
-            reference:
-                payload.reference,
-            event: payload.event,
-            payload,
-            processed: false,
-        });
+        /**
+         * ---------------------------------------
+         * STORE VERIFIED WEBHOOK
+         * ---------------------------------------
+         */
 
+        try {
+            await WebhookEvent.create({
+                provider:
+                    "PAYSTACK",
+
+                reference:
+                    payload.reference,
+
+                event:
+                    payload.event,
+
+                payload:
+                    serializeWebhookPayload(
+                        payload
+                    ),
+
+                processed:
+                    false,
+
+                attempts:
+                    0,
+            });
+        } catch (error: any) {
+            /**
+             * Duplicate webhook race condition.
+             */
+
+            if (
+                error?.code ===
+                11000
+            ) {
+                return res.sendStatus(
+                    200
+                );
+            }
+
+            throw error;
+        }
+
+        /**
+         * Queue only after persistence.
+         */
         await addPaymentJob(
             payload.reference
         );
 
-        return res.sendStatus(200);
+        return res.sendStatus(
+            200
+        );
     } catch (error) {
         console.error(
             "Paystack Webhook Error:",
-            error
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
         );
 
-        return res.sendStatus(500);
+        /**
+         * 500 allows Paystack to retry.
+         */
+        return res.sendStatus(
+            500
+        );
     }
 };
 
 /**
+ * ==========================================
  * PAYMENT HISTORY
+ * ==========================================
  */
 export const getPaymentHistory = async (
     req: AuthRequest,
     res: Response
 ) => {
     try {
+        /**
+         * ---------------------------------------
+         * AUTHENTICATION
+         * ---------------------------------------
+         */
+
+        if (!req.userId) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Unauthorized",
+            });
+        }
+
+        /**
+         * ---------------------------------------
+         * FETCH HISTORY
+         * ---------------------------------------
+         *
+         * Never expose:
+         *
+         * - providerResponse
+         * - metadata
+         * - internal fields
+         */
+
         const payments =
             await Payment.find({
-                user: req.userId,
+                user:
+                    req.userId,
             })
                 .sort({
                     createdAt: -1,
                 })
                 .select(
                     "provider plan amount status paidAt createdAt reference"
-                );
+                )
+                .lean();
 
-        return res.json({
+        return res.status(200).json({
+            success: true,
             payments,
         });
     } catch (error) {
-        console.error(error);
+        console.error(
+            "Get Payment History Error:",
+            error instanceof Error
+                ? error.message
+                : "Unknown error"
+        );
 
         return res.status(500).json({
+            success: false,
             message:
-                "Failed to fetch payment history",
+                "Failed to fetch payment history.",
         });
     }
 };

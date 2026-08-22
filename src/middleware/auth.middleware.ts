@@ -3,27 +3,54 @@ import {
   Response,
   NextFunction,
 } from "express";
-import jwt from "jsonwebtoken";
 
 import User from "../models/User";
 
+import { verifyToken } from "../utils/jwt";
+
+/**
+ * Supported application roles.
+ */
+export type UserRole =
+  | "ADMIN"
+  | "CUSTOMER"
+  | "CUSTOMER_STAFF";
+
+/**
+ * Express request with authenticated
+ * user information attached.
+ */
 export interface AuthRequest
   extends Request {
   userId?: string;
-  role?:
-    | "ADMIN"
-    | "CUSTOMER"
-    | "CUSTOMER_STAFF";
+  role?: UserRole;
 }
 
-interface JwtPayload {
-  userId: string;
-  role:
-    | "ADMIN"
-    | "CUSTOMER"
-    | "CUSTOMER_STAFF";
-}
-
+/**
+ * Protect authenticated routes.
+ *
+ * Authentication flow:
+ *
+ * Authorization header
+ *       ↓
+ * Bearer token
+ *       ↓
+ * Verify JWT signature
+ *       ↓
+ * Verify expiration
+ *       ↓
+ * Verify issuer
+ *       ↓
+ * Verify audience
+ *       ↓
+ * Extract user ID
+ *       ↓
+ * Find current user in database
+ *       ↓
+ * Attach current user information
+ *       ↓
+ * Continue request
+ */
 export const protect = async (
   req: AuthRequest,
   res: Response,
@@ -33,12 +60,21 @@ export const protect = async (
     const authHeader =
       req.headers.authorization;
 
+    /**
+     * Authorization header is required.
+     */
     if (!authHeader) {
       return res.status(401).json({
-        message: "No token provided",
+        message:
+          "Authentication required.",
       });
     }
 
+    /**
+     * Only accept:
+     *
+     * Authorization: Bearer <token>
+     */
     if (
       !authHeader.startsWith(
         "Bearer "
@@ -46,73 +82,168 @@ export const protect = async (
     ) {
       return res.status(401).json({
         message:
-          "Invalid token format",
+          "Invalid authentication format.",
       });
     }
 
+    /**
+     * Extract token safely.
+     */
     const token =
-      authHeader.split(" ")[1];
+      authHeader.slice(7).trim();
 
     if (!token) {
       return res.status(401).json({
         message:
-          "Invalid token format",
+          "Authentication token is missing.",
       });
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET!
-    ) as JwtPayload;
+    /**
+     * Verify:
+     *
+     * - Signature
+     * - Expiration
+     * - Issuer
+     * - Audience
+     * - Algorithm
+     */
+    const decoded =
+      verifyToken(token);
 
+    /**
+     * `sub` is the standard JWT subject
+     * claim containing the user ID.
+     */
+    const userId = decoded.sub;
+
+    if (
+      !userId ||
+      typeof userId !== "string"
+    ) {
+      return res.status(401).json({
+        message:
+          "Invalid authentication token.",
+      });
+    }
+
+    /**
+     * Fetch the CURRENT user from the
+     * database.
+     *
+     * This is important because:
+     *
+     * - User may have been deleted.
+     * - User's role may have changed.
+     * - Account may have been disabled.
+     *
+     * We do not blindly trust the role
+     * contained in the JWT.
+     */
     const user =
-      await User.findById(
-        decoded.userId
-      );
+      await User.findById(userId)
+        .select("_id role");
 
     if (!user) {
       return res.status(401).json({
         message:
-          "User account no longer exists",
+          "Authentication failed.",
       });
     }
 
+    /**
+     * Make sure the role is one of the
+     * roles supported by the application.
+     */
+    const validRoles: UserRole[] = [
+      "ADMIN",
+      "CUSTOMER",
+      "CUSTOMER_STAFF",
+    ];
+
+    if (
+      !validRoles.includes(
+        user.role as UserRole
+      )
+    ) {
+      return res.status(403).json({
+        message:
+          "Account role is not authorized.",
+      });
+    }
+
+    /**
+     * Attach authenticated user data
+     * to the request.
+     */
     req.userId =
       user._id.toString();
 
-    req.role = user.role;
+    req.role =
+      user.role as UserRole;
 
     next();
   } catch (error) {
+    /**
+     * Never expose JWT verification
+     * details to the client.
+     *
+     * This prevents leaking information
+     * about why a token failed.
+     */
     return res.status(401).json({
-      message: "Invalid token",
+      message:
+        "Authentication failed.",
     });
   }
 };
 
+/**
+ * Restrict a route to specific roles.
+ *
+ * Example:
+ *
+ * authorize("CUSTOMER")
+ *
+ * or:
+ *
+ * authorize(
+ *     "CUSTOMER",
+ *     "ADMIN"
+ * )
+ */
 export const authorize = (
-  ...roles: Array<
-    | "ADMIN"
-    | "CUSTOMER"
-    | "CUSTOMER_STAFF"
-  >
+  ...roles: UserRole[]
 ) => {
   return (
     req: AuthRequest,
     res: Response,
     next: NextFunction
   ) => {
-    if (!req.role) {
+    /**
+     * protect middleware must run before
+     * authorize middleware.
+     */
+    if (
+      !req.userId ||
+      !req.role
+    ) {
       return res.status(401).json({
-        message: "Unauthorized",
+        message:
+          "Authentication required.",
       });
     }
 
+    /**
+     * Check the CURRENT role loaded
+     * from the database.
+     */
     if (
       !roles.includes(req.role)
     ) {
       return res.status(403).json({
-        message: "Forbidden",
+        message:
+          "You do not have permission to perform this action.",
       });
     }
 

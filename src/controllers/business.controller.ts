@@ -1,6 +1,8 @@
 import { Response } from "express";
+import bcrypt from "bcryptjs";
 
 import Business from "../models/Business";
+import User from "../models/User";
 import { AuthRequest } from "../middleware/auth.middleware";
 import { StorageService } from "../services/images/storage.service";
 
@@ -27,9 +29,28 @@ export const createBusiness = async (
             businessName,
             category,
             description,
+
+            address,
+            city,
+            state,
+            country,
+
+            phone,
+            email,
+            website,
+
+            facebook,
+            instagram,
+            linkedin,
+            tiktok,
+            x,
+
             targetAudience,
-            uniqueSellingPoint,
             brandVoice,
+            uniqueSellingPoint,
+
+            primaryColor,
+            secondaryColor,
         } = req.body;
 
         if (!businessName) {
@@ -46,6 +67,19 @@ export const createBusiness = async (
             });
         }
 
+        /**
+         * Upload logo to Cloudflare R2
+         * if a logo file was provided.
+         */
+        let logo = "";
+
+        if (req.file) {
+            const upload =
+                await StorageService.upload(req.file);
+
+            logo = upload.url;
+        }
+
         const business =
             await Business.create({
                 owner: req.userId,
@@ -53,25 +87,40 @@ export const createBusiness = async (
                 businessName,
                 category,
                 description,
-                targetAudience,
-                uniqueSellingPoint,
-                brandVoice,
 
-                phone: req.body.phone,
-                email: req.body.email,
-                address: req.body.address,
-                city: req.body.city,
-                state: req.body.state,
-                country: req.body.country,
-                website: req.body.website,
-                logo: req.body.logo,
+                address,
+                city,
+                state,
+                country,
+
+                phone,
+                email,
+                website,
+
+                facebook,
+                instagram,
+                linkedin,
+                tiktok,
+                x,
+
+                targetAudience,
+                brandVoice,
+                uniqueSellingPoint,
+
+                primaryColor,
+                secondaryColor,
+
+                logo,
             });
 
         return res.status(201).json({
             business,
         });
     } catch (error) {
-        console.error(error);
+        console.error(
+            "Error creating business:",
+            error
+        );
 
         return res.status(500).json({
             message: "Server Error",
@@ -116,21 +165,97 @@ export const updateBusiness = async (
     res: Response
 ) => {
     try {
+        const {
+            password,
+            ...businessUpdates
+        } = req.body;
+
+        /**
+         * Require the user's actual password
+         * before allowing business settings
+         * to be changed.
+         */
+        if (!password) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Password is required to update business settings.",
+            });
+        }
+
+        /**
+         * Find the authenticated user.
+         */
+        const user = await User.findById(
+            req.userId
+        );
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: "User not found.",
+            });
+        }
+
+        /**
+         * Make sure this account has
+         * a password available.
+         */
+        if (!user.password) {
+            return res.status(400).json({
+                success: false,
+                message:
+                    "Password verification is not available for this account.",
+            });
+        }
+
+        /**
+         * Compare the actual password entered
+         * by the user against the hashed password
+         * stored in MongoDB.
+         */
+        const passwordMatches =
+            await bcrypt.compare(
+                password,
+                user.password
+            );
+
+        if (!passwordMatches) {
+            return res.status(401).json({
+                success: false,
+                message:
+                    "Password is incorrect.",
+            });
+        }
+
+        /**
+         * Password is correct.
+         *
+         * Only business fields remain here.
+         * The password has already been removed
+         * from the object above.
+         */
         const updates: Record<string, any> = {
-            ...req.body,
+            ...businessUpdates,
         };
 
         /**
-         * Upload logo to Cloudflare R2 if one was provided.
-         * Requires upload.single("logo") middleware.
+         * Upload logo to Cloudflare R2
+         * if a new logo was provided.
          */
         if (req.file) {
             const upload =
-                await StorageService.upload(req.file);
+                await StorageService.upload(
+                    req.file
+                );
 
             updates.logo = upload.url;
         }
 
+        /**
+         * Update the business belonging
+         * to the authenticated user.
+         */
         const business =
             await Business.findOneAndUpdate(
                 {
@@ -145,17 +270,26 @@ export const updateBusiness = async (
 
         if (!business) {
             return res.status(404).json({
-                message: "Business not found",
+                success: false,
+                message:
+                    "Business not found.",
             });
         }
 
-        return res.json({
+        return res.status(200).json({
+            success: true,
+            message:
+                "Business updated successfully.",
             business,
         });
     } catch (error) {
-        console.error(error);
+        console.error(
+            "[UPDATE BUSINESS ERROR]",
+            error
+        );
 
         return res.status(500).json({
+            success: false,
             message: "Server Error",
         });
     }
@@ -187,7 +321,8 @@ export const deleteBusiness = async (
         console.error(error);
 
         return res.status(500).json({
-            message: "Server Error",
+            message:
+                "Business deleted successfully",
         });
     }
 };

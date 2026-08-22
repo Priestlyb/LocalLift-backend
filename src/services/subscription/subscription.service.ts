@@ -22,3 +22,7 @@ export {
   cancelScheduledPlanChange,
   getScheduledPlanChange,
 } from "./schedulePlanChange";
+
+export {
+  default as usageService,
+} from "./usage.service";

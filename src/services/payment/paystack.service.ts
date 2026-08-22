@@ -6,7 +6,10 @@ import {
     InitializePaymentDto,
     InitializePaymentResponse,
     VerifyPaymentResponse,
-    PaymentWebhookPayload,
+    VerifiedWebhookPayload,
+    PaymentEvent,
+    PaymentStatus,
+    IPaymentMetadata,
 } from "../../types/payment.types";
 
 import { paystackClient } from "./payment.client";
@@ -17,36 +20,63 @@ export class PaystackService
         payload: InitializePaymentDto
     ): Promise<InitializePaymentResponse> {
         try {
-            console.log("PAYSTACK PAYLOAD", {
-                email: payload.email,
-                amount: payload.amount * 100,
-                reference: payload.reference,
-                callback_url: payload.callbackUrl,
-                metadata: payload.metadata,
-            });
+            const response =
+                await paystackClient.post(
+                    "/transaction/initialize",
+                    {
+                        email: payload.email,
 
-            const response = await paystackClient.post(
-                "/transaction/initialize",
-                {
-                    email: payload.email,
-                    amount: payload.amount * 100,
-                    reference: payload.reference,
-                    callback_url: payload.callbackUrl,
-                    metadata: payload.metadata,
-                }
-            );
+                        /**
+                         * Paystack expects the amount
+                         * in kobo.
+                         */
+                        amount:
+                            payload.amount * 100,
 
-            console.log("PAYSTACK RESPONSE", response.data);
+                        reference:
+                            payload.reference,
+
+                        callback_url:
+                            payload.callbackUrl,
+
+                        metadata:
+                            payload.metadata,
+                    }
+                );
+
+            const authorizationUrl =
+                response.data?.data
+                    ?.authorization_url;
+
+            if (
+                typeof authorizationUrl !==
+                "string"
+            ) {
+                throw new Error(
+                    "Paystack did not return an authorization URL."
+                );
+            }
 
             return {
-                authorizationUrl:
-                    response.data.data.authorization_url,
-                reference: payload.reference,
+                authorizationUrl,
+
+                reference:
+                    payload.reference,
             };
         } catch (error: any) {
-            console.error("PAYSTACK STATUS:", error.response?.status);
-            console.error("PAYSTACK DATA:", error.response?.data);
-            console.error("PAYSTACK MESSAGE:", error.message);
+            console.error(
+                "Paystack initialization failed:",
+                {
+                    status:
+                        error.response?.status,
+
+                    data:
+                        error.response?.data,
+
+                    message:
+                        error.message,
+                }
+            );
 
             throw error;
         }
@@ -57,11 +87,19 @@ export class PaystackService
     ): Promise<VerifyPaymentResponse> {
         const response =
             await paystackClient.get(
-                `/transaction/verify/${reference}`
+                `/transaction/verify/${encodeURIComponent(
+                    reference
+                )}`
             );
 
         const data =
-            response.data.data;
+            response.data?.data;
+
+        if (!data) {
+            throw new Error(
+                "Invalid Paystack verification response."
+            );
+        }
 
         return {
             success:
@@ -70,14 +108,17 @@ export class PaystackService
 
             reference,
 
+            /**
+             * Paystack returns kobo.
+             */
             amount:
-                data.amount / 100,
+                Number(data.amount) / 100,
 
             status:
-                data.status,
+                String(data.status),
 
             paidAt:
-                data.paid_at,
+                data.paid_at ?? null,
 
             providerResponse:
                 data,
@@ -85,63 +126,199 @@ export class PaystackService
     }
 
     verifyWebhookSignature(
-        payload: any,
+        payload: unknown,
         signature?: string
     ): boolean {
-        if (!signature) {
+        if (
+            !signature ||
+            typeof signature !== "string"
+        ) {
             return false;
         }
 
-        const hash = crypto
-            .createHmac(
-                "sha512",
-                process.env
-                    .PAYSTACK_SECRET_KEY!
-            )
-            .update(
-                JSON.stringify(
-                    payload
-                )
-            )
-            .digest("hex");
+        const secret =
+            process.env.PAYSTACK_SECRET_KEY;
 
-        return hash === signature;
+        if (!secret) {
+            console.error(
+                "PAYSTACK_SECRET_KEY is not configured."
+            );
+
+            return false;
+        }
+
+        const body =
+            JSON.stringify(payload);
+
+        const expectedSignature =
+            crypto
+                .createHmac(
+                    "sha512",
+                    secret
+                )
+                .update(body)
+                .digest("hex");
+
+        const expectedBuffer =
+            Buffer.from(
+                expectedSignature,
+                "utf8"
+            );
+
+        const receivedBuffer =
+            Buffer.from(
+                signature,
+                "utf8"
+            );
+
+        if (
+            expectedBuffer.length !==
+            receivedBuffer.length
+        ) {
+            return false;
+        }
+
+        return crypto.timingSafeEqual(
+            expectedBuffer,
+            receivedBuffer
+        );
     }
 
     async parseWebhook(
-        payload: any,
+        payload: unknown,
         signature?: string
-    ): Promise<PaymentWebhookPayload> {
-        const isValid =
-            this.verifyWebhookSignature(
+    ): Promise<VerifiedWebhookPayload> {
+        if (
+            !this.verifyWebhookSignature(
                 payload,
                 signature
-            );
-
-        if (!isValid) {
+            )
+        ) {
             throw new Error(
-                "Invalid webhook signature"
+                "Invalid Paystack webhook signature."
             );
         }
 
+        if (
+            !payload ||
+            typeof payload !== "object"
+        ) {
+            throw new Error(
+                "Invalid Paystack webhook payload."
+            );
+        }
+
+        const webhook =
+            payload as Record<
+                string,
+                unknown
+            >;
+
+        const event =
+            webhook.event;
+
+        if (
+            event !==
+            "charge.success"
+        ) {
+            throw new Error(
+                `Unsupported Paystack webhook event: ${String(
+                    event
+                )}`
+            );
+        }
+
+        const webhookData =
+            webhook.data;
+
+        if (
+            !webhookData ||
+            typeof webhookData !==
+            "object"
+        ) {
+            throw new Error(
+                "Invalid Paystack webhook data."
+            );
+        }
+
+        const transaction =
+            webhookData as Record<
+                string,
+                unknown
+            >;
+
+        const reference =
+            transaction.reference;
+
+        if (
+            typeof reference !==
+            "string" ||
+            !reference
+        ) {
+            throw new Error(
+                "Paystack webhook reference is missing."
+            );
+        }
+
+        const status =
+            transaction.status;
+
+        if (
+            status !== "success"
+        ) {
+            throw new Error(
+                "Paystack webhook payment was not successful."
+            );
+        }
+
+        const amount =
+            transaction.amount;
+
+        if (
+            typeof amount !==
+            "number" ||
+            !Number.isFinite(amount)
+        ) {
+            throw new Error(
+                "Invalid Paystack webhook amount."
+            );
+        }
+
+        const normalizedEvent: PaymentEvent =
+            "charge.success";
+
+        const normalizedStatus: PaymentStatus =
+            "SUCCESS";
+
+        /**
+         * Keep provider-specific data inside
+         * application-safe metadata.
+         *
+         * This satisfies IPaymentMetadata while
+         * preserving the original transaction
+         * information for auditing/reconciliation.
+         */
+        const metadata: IPaymentMetadata = {
+            providerData:
+                transaction,
+        };
+
         return {
             event:
-                payload.event,
+                normalizedEvent,
 
-            reference:
-                payload.data
-                    ?.reference,
+            reference,
 
+            /**
+             * Convert kobo to NGN.
+             */
             amount:
-                payload.data
-                    ?.amount || 0,
+                amount / 100,
 
             status:
-                payload.data
-                    ?.status,
+                normalizedStatus,
 
-            metadata:
-                payload.data,
+            metadata,
         };
     }
 }

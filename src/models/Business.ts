@@ -7,14 +7,17 @@ export interface IBusiness
   extends Document {
   owner: mongoose.Types.ObjectId;
 
+  // Basic Business Information
   businessName: string;
   category: string;
   description: string;
 
+  // AI / Marketing Context
   targetAudience: string;
   uniqueSellingPoint: string;
   brandVoice: string;
 
+  // Contact Information
   phone: string;
   email: string;
   address: string;
@@ -23,23 +26,31 @@ export interface IBusiness
   country: string;
   website: string;
 
+  // Branding
   logo: string;
-
   primaryColor: string;
   secondaryColor: string;
 
+  // Social Media
   facebook: string;
   instagram: string;
-  x: string;
   linkedin: string;
   tiktok: string;
+  x: string;
 
+  // Status
   isActive: boolean;
+
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 const businessSchema =
   new Schema<IBusiness>(
     {
+      /**
+       * Owner
+       */
       owner: {
         type: Schema.Types.ObjectId,
         ref: "User",
@@ -48,6 +59,9 @@ const businessSchema =
         index: true,
       },
 
+      /**
+       * Basic Business Information
+       */
       businessName: {
         type: String,
         required: true,
@@ -68,29 +82,33 @@ const businessSchema =
       },
 
       /**
-       * AI Context
+       * AI / Marketing Context
        */
       targetAudience: {
         type: String,
         default: "",
+        trim: true,
       },
 
       uniqueSellingPoint: {
         type: String,
         default: "",
+        trim: true,
       },
 
       brandVoice: {
         type: String,
         default: "Professional",
+        trim: true,
       },
 
       /**
-       * Contact
+       * Contact Information
        */
       phone: {
         type: String,
         default: "",
+        trim: true,
       },
 
       email: {
@@ -112,21 +130,25 @@ const businessSchema =
       address: {
         type: String,
         default: "",
+        trim: true,
       },
 
       city: {
         type: String,
         default: "",
+        trim: true,
       },
 
       state: {
         type: String,
         default: "",
+        trim: true,
       },
 
       country: {
         type: String,
         default: "",
+        trim: true,
       },
 
       /**
@@ -135,16 +157,19 @@ const businessSchema =
       logo: {
         type: String,
         default: "",
+        trim: true,
       },
 
       primaryColor: {
         type: String,
         default: "#000000",
+        trim: true,
       },
 
       secondaryColor: {
         type: String,
         default: "#FFFFFF",
+        trim: true,
       },
 
       /**
@@ -153,30 +178,35 @@ const businessSchema =
       facebook: {
         type: String,
         default: "",
+        trim: true,
       },
 
       instagram: {
         type: String,
         default: "",
-      },
-
-      x: {
-        type: String,
-        default: "",
+        trim: true,
       },
 
       linkedin: {
         type: String,
         default: "",
+        trim: true,
       },
 
       tiktok: {
         type: String,
         default: "",
+        trim: true,
+      },
+
+      x: {
+        type: String,
+        default: "",
+        trim: true,
       },
 
       /**
-       * Soft disable.
+       * Business Status
        */
       isActive: {
         type: Boolean,

@@ -1,41 +1,24 @@
 import mongoose, {
     Document,
+    Model,
     Schema,
 } from "mongoose";
 
 export interface IPasswordResetOtp
     extends Document {
-    /**
-     * Email of the account requesting
-     * a password reset.
-     */
     email: string;
 
-    /**
-     * Hashed OTP.
-     */
     otp: string;
 
-    /**
-     * OTP expiration time.
-     */
     expiresAt: Date;
 
-    /**
-     * Timestamp of the last OTP sent.
-     * Used for resend cooldowns.
-     */
     lastSentAt: Date;
 
-    /**
-     * Number of OTPs sent.
-     */
     attempts: number;
 
-    /**
-     * Number of failed verification attempts.
-     */
     verificationAttempts: number;
+
+    verifiedAt?: Date | null;
 
     createdAt: Date;
 
@@ -50,25 +33,33 @@ const passwordResetOtpSchema =
                 required: true,
                 lowercase: true,
                 trim: true,
-                unique: true,
+                index: true,
             },
 
+            /**
+             * Never store the plaintext OTP.
+             */
             otp: {
                 type: String,
                 required: true,
             },
 
+            /**
+             * OTP automatically expires
+             * from MongoDB.
+             */
             expiresAt: {
                 type: Date,
                 required: true,
+                index: true,
             },
 
             /**
-             * Prevent OTP spam.
+             * Used for resend throttling.
              */
             lastSentAt: {
                 type: Date,
-                default: Date.now,
+                required: true,
             },
 
             /**
@@ -76,17 +67,25 @@ const passwordResetOtpSchema =
              */
             attempts: {
                 type: Number,
-                default: 1,
-                min: 1,
+                default: 0,
+                min: 0,
             },
 
             /**
-             * Number of incorrect OTP submissions.
+             * Number of incorrect verification attempts.
              */
             verificationAttempts: {
                 type: Number,
                 default: 0,
                 min: 0,
+            },
+
+            /**
+             * Records successful verification.
+             */
+            verifiedAt: {
+                type: Date,
+                default: null,
             },
         },
         {
@@ -95,21 +94,29 @@ const passwordResetOtpSchema =
     );
 
 /**
- * Automatically remove expired OTPs.
- *
- * MongoDB TTL monitor runs
- * approximately every 60 seconds.
+ * Automatically delete expired
+ * password reset records.
  */
 passwordResetOtpSchema.index(
-    {
-        expiresAt: 1,
-    },
+    { expiresAt: 1 },
     {
         expireAfterSeconds: 0,
     }
 );
 
-export default mongoose.model<IPasswordResetOtp>(
-    "PasswordResetOtp",
-    passwordResetOtpSchema
+/**
+ * Only one active reset request
+ * should exist for an email.
+ */
+passwordResetOtpSchema.index(
+    { email: 1 },
+    { unique: true }
 );
+
+const PasswordResetOtp: Model<IPasswordResetOtp> =
+    mongoose.model<IPasswordResetOtp>(
+        "PasswordResetOtp",
+        passwordResetOtpSchema
+    );
+
+export default PasswordResetOtp;

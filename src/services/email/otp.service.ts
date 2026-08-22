@@ -3,7 +3,12 @@ import bcrypt from "bcrypt";
 import RegistrationOtp, {
     IRegistrationOtp,
 } from "../../models/RegistrationOtp";
+
 import { generateOtp } from "../../utils/generateOtp";
+
+const OTP_EXPIRATION_MS = 10 * 60 * 1000;
+const MAX_VERIFICATION_ATTEMPTS = 5;
+const BCRYPT_ROUNDS = 10;
 
 class OtpService {
     /**
@@ -20,7 +25,7 @@ class OtpService {
 
         const hashedOtp = await bcrypt.hash(
             otp,
-            10
+            BCRYPT_ROUNDS
         );
 
         const passwordToStore =
@@ -28,52 +33,35 @@ class OtpService {
                 ? password
                 : await bcrypt.hash(
                     password,
-                    10
+                    BCRYPT_ROUNDS
                 );
 
         const expiresAt = new Date(
-            Date.now() + 10 * 60 * 1000
-        ); // 10 minutes
+            Date.now() + OTP_EXPIRATION_MS
+        );
 
-        const existing =
-            await RegistrationOtp.findOne({
-                email,
-            });
+        await RegistrationOtp.findOneAndUpdate(
+            { email },
+            {
+                $set: {
+                    name,
+                    password: passwordToStore,
+                    otp: hashedOtp,
+                    expiresAt,
+                    lastSentAt: new Date(),
+                    verificationAttempts: 0,
+                },
 
-        if (existing) {
-            existing.name = name;
-            existing.password =
-                passwordToStore;
-            existing.otp = hashedOtp;
-            existing.expiresAt =
-                expiresAt;
-            existing.lastSentAt =
-                new Date();
-
-            /**
-             * New OTP generated.
-             */
-            existing.attempts += 1;
-
-            /**
-             * Reset failed verification attempts.
-             */
-            existing.verificationAttempts = 0;
-
-            await existing.save();
-        } else {
-            await RegistrationOtp.create({
-                name,
-                email,
-                password:
-                    passwordToStore,
-                otp: hashedOtp,
-                expiresAt,
-                lastSentAt: new Date(),
-                attempts: 1,
-                verificationAttempts: 0,
-            });
-        }
+                $inc: {
+                    attempts: 1,
+                },
+            },
+            {
+                upsert: true,
+                new: true,
+                setDefaultsOnInsert: true,
+            }
+        );
 
         return otp;
     }
@@ -92,23 +80,40 @@ class OtpService {
 
         if (!registration) {
             throw new Error(
-                "Verification request not found."
+                "Invalid or expired verification code."
             );
         }
 
         /**
-         * OTP expired.
+         * Check expiration.
          */
         if (
-            registration.expiresAt.getTime() <
+            registration.expiresAt.getTime() <=
             Date.now()
         ) {
             await RegistrationOtp.deleteOne({
-                email,
+                _id: registration._id,
             });
 
             throw new Error(
-                "Verification code has expired."
+                "Invalid or expired verification code."
+            );
+        }
+
+        /**
+         * Check whether maximum attempts
+         * have already been reached.
+         */
+        if (
+            registration.verificationAttempts >=
+            MAX_VERIFICATION_ATTEMPTS
+        ) {
+            await RegistrationOtp.deleteOne({
+                _id: registration._id,
+            });
+
+            throw new Error(
+                "Too many verification attempts. Please request a new code."
             );
         }
 
@@ -119,30 +124,41 @@ class OtpService {
             );
 
         if (!isValid) {
-            registration.verificationAttempts += 1;
-
-            /**
-             * Maximum incorrect attempts.
-             */
-            if (
-                registration.verificationAttempts >=
-                5
-            ) {
-                await RegistrationOtp.deleteOne(
+            const updated =
+                await RegistrationOtp.findOneAndUpdate(
                     {
-                        email,
+                        _id: registration._id,
+                        verificationAttempts: {
+                            $lt:
+                                MAX_VERIFICATION_ATTEMPTS,
+                        },
+                    },
+                    {
+                        $inc: {
+                            verificationAttempts: 1,
+                        },
+                    },
+                    {
+                        new: true,
                     }
                 );
 
+            if (
+                !updated ||
+                updated.verificationAttempts >=
+                MAX_VERIFICATION_ATTEMPTS
+            ) {
+                await RegistrationOtp.deleteOne({
+                    _id: registration._id,
+                });
+
                 throw new Error(
-                    "Too many incorrect verification attempts. Please request a new verification code."
+                    "Too many verification attempts. Please request a new code."
                 );
             }
 
-            await registration.save();
-
             throw new Error(
-                "Invalid verification code."
+                "Invalid or expired verification code."
             );
         }
 
@@ -150,8 +166,7 @@ class OtpService {
     }
 
     /**
-     * Delete the pending registration
-     * after successful verification.
+     * Delete pending registration.
      */
     static async deleteRegistrationOtp(
         email: string
@@ -162,7 +177,7 @@ class OtpService {
     }
 
     /**
-     * Retrieve a pending registration.
+     * Retrieve pending registration.
      */
     static async getRegistration(
         email: string

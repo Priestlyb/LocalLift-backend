@@ -7,6 +7,7 @@ import {
   login,
   googleLogin,
   getProfile,
+  updateProfile,
   logout,
   deleteUser,
   inviteStaff,
@@ -22,77 +23,171 @@ import {
 
 import {
   registrationOtpLimiter,
-  verifyOtpLimiter,
+  registrationVerifyOtpLimiter,
+  passwordResetLimiter,
+  passwordResetVerifyOtpLimiter,
+  passwordResetLimiterStrict,
   loginLimiter,
   googleLoginLimiter,
+  staffInvitationLimiter,
+  accountDeletionLimiter,
+  profileUpdateLimiter,
+  logoutLimiter,
 } from "../middleware/rateLimit.middleware";
+
+import { validate } from "../middleware/validation.middleware";
+
+import {
+  registerValidation,
+  verifyRegistrationValidation,
+  resendRegistrationOtpValidation,
+  loginValidation,
+  googleLoginValidation,
+  forgotPasswordValidation,
+  verifyResetOtpValidation,
+  resetPasswordValidation,
+  updateProfileValidation,
+  inviteStaffValidation,
+} from "../validators/auth.validators";
 
 const router = Router();
 
 /**
  * ==========================================
- * PUBLIC ROUTES
+ * PUBLIC AUTHENTICATION ROUTES
  * ==========================================
  */
 
 /**
+ * ==========================================
  * REGISTRATION
- *
+ * ==========================================
+ */
+
+/**
  * Send registration OTP.
  *
- * Rate limited to prevent OTP abuse.
+ * Security layers:
+ *
+ * - Request rate limiting
+ * - Input validation
+ * - Controller-level email cooldown
+ * - OTP generation using crypto.randomInt()
+ * - Hashed OTP stored in MongoDB
  */
 router.post(
   "/register/send-otp",
+
   registrationOtpLimiter,
+
+  registerValidation,
+
+  validate,
+
   sendRegistrationOtp
 );
 
 /**
  * Verify registration OTP.
  *
- * Rate limited to prevent brute-force
- * verification attempts.
+ * Security layers:
+ *
+ * - Registration-specific verification limiter
+ * - Input validation
+ * - OTP format validation
+ * - Hashed OTP comparison
+ * - Maximum verification attempts
+ * - OTP expiration
  */
 router.post(
   "/register/verify",
-  verifyOtpLimiter,
+
+  registrationVerifyOtpLimiter,
+
+  verifyRegistrationValidation,
+
+  validate,
+
   verifyRegistration
 );
 
 /**
  * Resend registration OTP.
  *
- * Uses the same OTP request limiter as
- * the initial OTP request.
+ * Security layers:
+ *
+ * - OTP request rate limiter
+ * - Input validation
+ * - Controller-level 60-second cooldown
+ * - Maximum resend attempts
+ * - Cryptographically secure OTP generation
  */
 router.post(
   "/register/resend-otp",
+
   registrationOtpLimiter,
+
+  resendRegistrationOtpValidation,
+
+  validate,
+
   resendRegistrationOtp
 );
 
 /**
+ * ==========================================
  * LOGIN
+ * ==========================================
+ */
+
+/**
+ * Normal email/password login.
  *
- * Strictly rate limited to reduce the risk
- * of password brute-force attacks.
+ * Security layers:
+ *
+ * - Strict login rate limiter
+ * - Email validation
+ * - Password validation
+ * - Password hash comparison
+ * - Generic invalid-credentials response
  */
 router.post(
   "/login",
+
   loginLimiter,
+
+  loginValidation,
+
+  validate,
+
   login
 );
 
 /**
- * GOOGLE LOGIN
+ * ==========================================
+ * GOOGLE AUTHENTICATION
+ * ==========================================
+ */
+
+/**
+ * Google login.
  *
- * Rate limited to prevent excessive
- * authentication requests.
+ * Security layers:
+ *
+ * - Google authentication rate limiter
+ * - ID token validation
+ * - Google token verification
+ * - Google email verification
  */
 router.post(
   "/google",
+
   googleLoginLimiter,
+
+  googleLoginValidation,
+
+  validate,
+
   googleLogin
 );
 
@@ -105,70 +200,183 @@ router.post(
 /**
  * Request password-reset OTP.
  *
- * Uses the OTP request limiter because this
- * endpoint can trigger an email/SMS delivery.
+ * Security layers:
+ *
+ * - Dedicated password-reset rate limiter
+ * - Email validation
+ * - Controller-level email cooldown
+ * - Generic response to prevent
+ *   account enumeration
+ * - Hashed OTP storage
  */
 router.post(
   "/password/forgot",
-  registrationOtpLimiter,
+
+  passwordResetLimiter,
+
+  forgotPasswordValidation,
+
+  validate,
+
   forgotPassword
 );
 
 /**
  * Verify password-reset OTP.
  *
- * Uses the OTP verification limiter to
- * prevent brute-force OTP guessing.
+ * Security layers:
+ *
+ * - Password-reset-specific OTP limiter
+ * - Email validation
+ * - OTP format validation
+ * - OTP expiration
+ * - Maximum verification attempts
  */
 router.post(
   "/password/verify-otp",
-  verifyOtpLimiter,
+
+  passwordResetVerifyOtpLimiter,
+
+  verifyResetOtpValidation,
+
+  validate,
+
   verifyResetOtp
 );
 
 /**
  * Reset password.
  *
- * Uses the verification limiter as an
- * additional protection against repeated
- * password-reset attempts.
+ * Security layers:
+ *
+ * - Strict password-reset limiter
+ * - Password-reset OTP limiter
+ * - Strong password validation
+ * - OTP validation
+ * - OTP expiration
+ * - Maximum OTP verification attempts
+ * - Password hashing
  */
 router.post(
   "/password/reset",
-  verifyOtpLimiter,
+
+  passwordResetLimiterStrict,
+
+  passwordResetVerifyOtpLimiter,
+
+  resetPasswordValidation,
+
+  validate,
+
   resetPassword
 );
 
 /**
  * ==========================================
- * PROTECTED ROUTES
+ * PROTECTED AUTHENTICATION ROUTES
  * ==========================================
  */
 
 /**
- * Logout
+ * Logout.
+ *
+ * Security layers:
+ *
+ * - Authentication required
+ * - Logout-specific rate limiter
+ *
+ * NOTE:
+ *
+ * Because JWT authentication is currently
+ * stateless, the client must discard its
+ * access token.
  */
 router.post(
   "/logout",
+
   protect,
+
+  logoutLimiter,
+
   logout
 );
 
 /**
+ * ==========================================
+ * USER PROFILE
+ * ==========================================
+ */
+
+/**
  * Get authenticated user's profile.
+ *
+ * Security:
+ *
+ * - Valid JWT required
+ * - User must still exist
+ * - Password excluded from response
  */
 router.get(
   "/profile",
+
   protect,
+
   getProfile
 );
 
 /**
+ * Update authenticated user's profile.
+ *
+ * Security layers:
+ *
+ * - Authentication required
+ * - Current password required
+ * - Input validation
+ * - Email uniqueness check
+ * - Profile update rate limiter
+ */
+router.put(
+  "/profile",
+
+  protect,
+
+  profileUpdateLimiter,
+
+  updateProfileValidation,
+
+  validate,
+
+  updateProfile
+);
+
+/**
+ * ==========================================
+ * ACCOUNT DELETION
+ * ==========================================
+ */
+
+/**
  * Delete authenticated user.
+ *
+ * Security layers:
+ *
+ * - Authentication required
+ * - Account deletion rate limiter
+ *
+ * IMPORTANT:
+ *
+ * The controller should additionally require
+ * current-password verification or another
+ * strong re-authentication mechanism before
+ * permanently deleting the account.
  */
 router.delete(
   "/delete",
+
   protect,
+
+  accountDeletionLimiter,
+
   deleteUser
 );
 
@@ -181,13 +389,37 @@ router.delete(
 /**
  * Invite a staff member.
  *
- * Only business customers can invite staff.
+ * Security layers:
+ *
+ * - Authentication required
+ * - CUSTOMER role required
+ * - Staff invitation rate limiter
+ * - Input validation
+ * - Cryptographically secure invitation token
+ * - SHA-256 hashed token stored in MongoDB
+ * - Invitation expiration
+ * - Pending invitation checks
  */
 router.post(
   "/staff/invite",
+
   protect,
+
   authorize("CUSTOMER"),
+
+  staffInvitationLimiter,
+
+  inviteStaffValidation,
+
+  validate,
+
   inviteStaff
 );
+
+/**
+ * ==========================================
+ * EXPORT ROUTER
+ * ==========================================
+ */
 
 export default router;

@@ -6,7 +6,10 @@ import {
     InitializePaymentDto,
     InitializePaymentResponse,
     VerifyPaymentResponse,
-    PaymentWebhookPayload,
+    VerifiedWebhookPayload,
+    PaymentStatus,
+    PaymentEvent,
+    IPaymentMetadata,
 } from "../../types/payment.types";
 
 import { koraClient } from "./payment.client";
@@ -20,23 +23,44 @@ export class KoraService
             await koraClient.post(
                 "/merchant/api/v1/charges/initialize",
                 {
-                    amount: payload.amount,
-                    currency: "NGN",
+                    amount:
+                        payload.amount,
+
+                    currency:
+                        "NGN",
+
                     reference:
                         payload.reference,
+
                     customer: {
                         email:
                             payload.email,
                     },
+
                     redirect_url:
                         payload.callbackUrl,
+
+                    metadata:
+                        payload.metadata,
                 }
             );
 
+        const authorizationUrl =
+            response.data?.data
+                ?.checkout_url;
+
+        if (
+            typeof authorizationUrl !==
+            "string"
+        ) {
+            throw new Error(
+                "Kora did not return a checkout URL."
+            );
+        }
+
         return {
-            authorizationUrl:
-                response.data.data
-                    ?.checkout_url,
+            authorizationUrl,
+
             reference:
                 payload.reference,
         };
@@ -47,27 +71,36 @@ export class KoraService
     ): Promise<VerifyPaymentResponse> {
         const response =
             await koraClient.get(
-                `/merchant/api/v1/transactions/${reference}`
+                `/merchant/api/v1/transactions/${encodeURIComponent(
+                    reference
+                )}`
             );
 
         const data =
-            response.data.data;
+            response.data?.data;
+
+        if (!data) {
+            throw new Error(
+                "Invalid Kora verification response."
+            );
+        }
 
         return {
             success:
-                data?.status ===
+                data.status ===
                 "success",
 
             reference,
 
             amount:
-                data?.amount || 0,
+                Number(data.amount) || 0,
 
             status:
-                data?.status,
+                String(data.status),
 
             paidAt:
-                data?.created_at,
+                data.created_at ??
+                null,
 
             providerResponse:
                 data,
@@ -75,67 +108,182 @@ export class KoraService
     }
 
     verifyWebhookSignature(
-        payload: any,
+        payload: unknown,
         signature?: string
     ): boolean {
-        if (!signature) {
+        if (
+            !signature ||
+            typeof signature !== "string"
+        ) {
             return false;
         }
 
-        const hash = crypto
-            .createHmac(
-                "sha256",
-                process.env
-                    .KORA_WEBHOOK_SECRET!
-            )
-            .update(
-                JSON.stringify(
-                    payload
-                )
-            )
-            .digest("hex");
+        const secret =
+            process.env
+                .KORA_WEBHOOK_SECRET;
 
-        return hash === signature;
+        if (!secret) {
+            console.error(
+                "KORA_WEBHOOK_SECRET is not configured."
+            );
+
+            return false;
+        }
+
+        const body =
+            JSON.stringify(payload);
+
+        const expectedSignature =
+            crypto
+                .createHmac(
+                    "sha256",
+                    secret
+                )
+                .update(body)
+                .digest("hex");
+
+        const expectedBuffer =
+            Buffer.from(
+                expectedSignature,
+                "utf8"
+            );
+
+        const receivedBuffer =
+            Buffer.from(
+                signature,
+                "utf8"
+            );
+
+        if (
+            expectedBuffer.length !==
+            receivedBuffer.length
+        ) {
+            return false;
+        }
+
+        return crypto.timingSafeEqual(
+            expectedBuffer,
+            receivedBuffer
+        );
     }
 
     async parseWebhook(
-        payload: any,
+        payload: unknown,
         signature?: string
-    ): Promise<PaymentWebhookPayload> {
-        const isValid =
-            this.verifyWebhookSignature(
+    ): Promise<VerifiedWebhookPayload> {
+        if (
+            !this.verifyWebhookSignature(
                 payload,
                 signature
-            );
-
-        if (!isValid) {
+            )
+        ) {
             throw new Error(
-                "Invalid webhook signature"
+                "Invalid Kora webhook signature."
             );
         }
 
+        if (
+            !payload ||
+            typeof payload !== "object"
+        ) {
+            throw new Error(
+                "Invalid Kora webhook payload."
+            );
+        }
+
+        const root =
+            payload as Record<
+                string,
+                unknown
+            >;
+
+        const webhookData =
+            root.data;
+
+        if (
+            !webhookData ||
+            typeof webhookData !==
+            "object"
+        ) {
+            throw new Error(
+                "Invalid Kora webhook data."
+            );
+        }
+
+        const data =
+            webhookData as Record<
+                string,
+                unknown
+            >;
+
+        const reference =
+            data.reference ??
+            data.transactionReference;
+
+        if (
+            typeof reference !==
+            "string" ||
+            !reference
+        ) {
+            throw new Error(
+                "Kora webhook reference is missing."
+            );
+        }
+
+        const status =
+            data.status;
+
+        if (
+            status !== "success"
+        ) {
+            throw new Error(
+                "Kora webhook payment was not successful."
+            );
+        }
+
+        const amount =
+            data.amount;
+
+        if (
+            (typeof amount !== "number" &&
+                typeof amount !== "string") ||
+            !Number.isFinite(
+                Number(amount)
+            )
+        ) {
+            throw new Error(
+                "Invalid Kora webhook amount."
+            );
+        }
+
+        const normalizedEvent: PaymentEvent =
+            "payment.success";
+
+        const normalizedStatus: PaymentStatus =
+            "SUCCESS";
+
+        /**
+         * Store the provider response inside
+         * application-safe metadata.
+         */
+        const metadata: IPaymentMetadata = {
+            providerData:
+                data,
+        };
+
         return {
             event:
-                payload.event ||
-                "charge.success",
+                normalizedEvent,
 
-            reference:
-                payload.data
-                    ?.reference ||
-                payload.data
-                    ?.transactionReference,
+            reference,
 
             amount:
-                payload.data
-                    ?.amount || 0,
+                Number(amount),
 
             status:
-                payload.data
-                    ?.status ||
-                "success",
+                normalizedStatus,
 
-            metadata:
-                payload.data,
+            metadata,
         };
     }
 }
