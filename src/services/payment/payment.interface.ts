@@ -24,8 +24,8 @@ export interface PaymentProvider {
      * Verify and normalize a provider webhook.
      *
      * The returned payload is trusted by the
-     * application because the signature has
-     * already been verified.
+     * application because the webhook signature
+     * has already been verified.
      */
     parseWebhook(
         payload: unknown,
@@ -34,6 +34,9 @@ export interface PaymentProvider {
 
     /**
      * Verify provider webhook authenticity.
+     *
+     * Provider-specific signature verification
+     * is implemented by the concrete payment service.
      */
     verifyWebhookSignature(
         payload: unknown,

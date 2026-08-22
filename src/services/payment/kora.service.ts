@@ -119,9 +119,7 @@ export class KoraService
         }
 
         const secret =
-            process.env
-                .KORA_WEBHOOK_SECRET;
-
+            process.env.KORA_SECRET_KEY
         if (!secret) {
             console.error(
                 "KORA_WEBHOOK_SECRET is not configured."
