@@ -7,6 +7,7 @@ import { PLANS } from "../constants/plans";
 import {
     getSubscription as getUserSubscription,
     cancelSubscription as cancelUserSubscription,
+    usageService,
 } from "../services/subscription/subscription.service";
 
 /**
@@ -36,6 +37,7 @@ export const getSubscription = async (
                 success: true,
                 subscription: null,
                 limits: PLANS.FREE,
+                usage: null,
                 canResume: false,
             });
         }
@@ -69,6 +71,20 @@ export const getSubscription = async (
             : PLANS.FREE;
 
         /**
+         * Get current usage.
+         *
+         * UsageService handles:
+         * - Creating the usage record if needed
+         * - Resetting usage when the billing cycle changes
+         * - Returning the current usage
+         */
+        const usage = isActive
+            ? await usageService.getUsage(
+                req.userId
+            )
+            : null;
+
+        /**
          * Users can only resume a subscription that:
          *
          * - Is currently ACTIVE
@@ -83,9 +99,10 @@ export const getSubscription = async (
             success: true,
             subscription,
             limits,
+            usage,
             canResume,
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error(
             "Get Subscription Error:",
             error
@@ -93,7 +110,9 @@ export const getSubscription = async (
 
         return res.status(500).json({
             success: false,
-            message: "Server Error",
+            message:
+                error?.message ??
+                "Server Error",
         });
     }
 };
