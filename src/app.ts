@@ -70,7 +70,7 @@ const app = express();
  */
 
 const NODE_ENV =
-  process.env.NODE_ENV ||
+  process.env.NODE_ENV?.trim() ||
   "development";
 
 const IS_PRODUCTION =
@@ -81,92 +81,76 @@ const API_PREFIX =
 
 /**
  * ==========================================
- * SECURITY: REMOVE EXPRESS FINGERPRINT
+ * SECURITY CONFIGURATION
  * ==========================================
- *
- * Prevents Express from exposing:
- *
- * X-Powered-By: Express
  */
 
+/**
+ * Never expose Express framework
+ * information through headers.
+ */
 app.disable("x-powered-by");
 
 /**
- * ==========================================
- * SECURITY: TRUST PROXY
- * ==========================================
+ * Trust exactly one reverse proxy in
+ * production.
  *
- * Required when running behind a reverse
- * proxy such as:
- *
- * - Render
- * - Railway
- * - Fly.io
- * - Nginx
- * - Cloudflare
- *
- * This allows Express to correctly identify
- * the original client IP.
- *
- * IMPORTANT:
- *
- * Only trust the number of proxy hops that
- * actually exist in your deployment.
- *
- * "1" is appropriate for a single reverse
- * proxy in front of the application.
+ * This is appropriate for deployments
+ * where the application sits behind a
+ * single proxy/load balancer.
  */
-
-if (IS_PRODUCTION) {
-  app.set("trust proxy", 1);
-} else {
-  app.set("trust proxy", 1);
-}
+app.set(
+  "trust proxy",
+  1
+);
 
 /**
  * ==========================================
- * SECURITY: CORS
+ * CORS
  * ==========================================
  *
- * NEVER use:
- *
- * cors()
- *
- * in production for an authenticated API.
- *
- * Only allow known frontend origins.
- *
- * Configure:
- *
- * CLIENT_URL=https://your-frontend.com
- *
- * If you have multiple frontend applications,
- * you can provide:
- *
- * CLIENT_URL=https://app.example.com,https://admin.example.com
+ * Only explicitly configured origins
+ * are allowed.
  */
 
 const configuredClientUrls =
   process.env.CLIENT_URL
     ?.split(",")
-    .map((url) => url.trim())
+    .map((url) =>
+      url.trim()
+    )
     .filter(Boolean) ?? [];
 
-/**
- * Development fallback.
- *
- * This allows local development without
- * requiring CLIENT_URL to be configured.
- */
-const allowedOrigins =
-  IS_PRODUCTION
-    ? configuredClientUrls
-    : [
+const developmentOrigins = [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:8081",
+];
+
+const allowedOrigins = IS_PRODUCTION
+  ? configuredClientUrls
+  : [
+    ...new Set([
       ...configuredClientUrls,
-      "http://localhost:3000",
-      "http://localhost:5173",
-      "http://localhost:8081",
-    ];
+      ...developmentOrigins,
+    ]),
+  ];
+
+/**
+ * In production, fail startup if no
+ * frontend origin has been configured.
+ *
+ * This prevents accidentally deploying
+ * an API with an incomplete CORS policy.
+ */
+if (
+  IS_PRODUCTION &&
+  allowedOrigins.length === 0
+) {
+  throw new Error(
+    "CLIENT_URL must be configured in production."
+  );
+}
 
 const corsOptions: CorsOptions = {
   origin: (
@@ -174,20 +158,21 @@ const corsOptions: CorsOptions = {
     callback
   ) => {
     /**
-     * Allow requests without an Origin header.
+     * Requests without an Origin header
+     * can come from:
      *
-     * This is useful for:
-     *
+     * - Mobile/native applications
      * - Server-to-server requests
-     * - Mobile applications
+     * - CLI tools
      * - Postman
-     * - Native clients
      *
-     * If your API is strictly browser-only,
-     * you can change this behavior.
+     * These are not browser CORS requests.
      */
     if (!origin) {
-      return callback(null, true);
+      return callback(
+        null,
+        true
+      );
     }
 
     if (
@@ -206,10 +191,6 @@ const corsOptions: CorsOptions = {
     );
   },
 
-  /**
-   * Only allow HTTP methods actually
-   * required by the API.
-   */
   methods: [
     "GET",
     "POST",
@@ -219,9 +200,6 @@ const corsOptions: CorsOptions = {
     "OPTIONS",
   ],
 
-  /**
-   * Explicitly define allowed request headers.
-   */
   allowedHeaders: [
     "Content-Type",
     "Authorization",
@@ -232,33 +210,38 @@ const corsOptions: CorsOptions = {
   ],
 
   /**
-   * Allow Authorization headers and
-   * other credentials when required.
-   *
-   * NOTE:
-   *
-   * If authentication remains purely
-   * Authorization: Bearer <token>, you
-   * generally don't need cookies.
+   * Authorization uses Bearer tokens,
+   * so browser cookies are not required.
    */
   credentials: false,
 
   /**
-   * Cache preflight responses.
+   * Cache browser preflight responses.
    */
   maxAge: 86400,
+
+  /**
+   * Do not expose unnecessary headers.
+   */
+  exposedHeaders: [],
 };
 
 /**
- * Apply CORS.
+ * Apply CORS globally.
+ *
+ * IMPORTANT:
+ *
+ * Do NOT add:
+ *
+ * app.options("*", ...)
+ *
+ * Newer Express/path-to-regexp versions
+ * reject "*" as a route pattern.
+ *
+ * The cors middleware handles preflight
+ * requests automatically.
  */
-app.use(cors(corsOptions));
-
-/**
- * Handle OPTIONS preflight requests.
- */
-app.options(
-  "*",
+app.use(
   cors(corsOptions)
 );
 
@@ -266,29 +249,24 @@ app.options(
  * ==========================================
  * SECURITY HEADERS
  * ==========================================
- *
- * Helmet sets a collection of security
- * related HTTP headers.
  */
 
 app.use(
   helmet({
     /**
-     * Prevent MIME type sniffing.
+     * Prevent MIME sniffing.
      */
     noSniff: true,
 
     /**
-     * Prevent browsers from loading the API
-     * inside frames.
+     * Prevent clickjacking.
      */
     frameguard: {
       action: "deny",
     },
 
     /**
-     * Prevent browsers from sending the
-     * full referrer to less-secure origins.
+     * Control referrer information.
      */
     referrerPolicy: {
       policy:
@@ -303,26 +281,23 @@ app.use(
     },
 
     /**
-     * Restrict browser cross-origin behavior.
+     * Restrict cross-origin resource loading.
      */
     crossOriginResourcePolicy: {
       policy: "same-site",
     },
 
     /**
-     * Only enable HSTS in production.
-     *
-     * HSTS tells browsers to use HTTPS.
+     * HSTS should only be enabled when
+     * the application is definitely served
+     * through HTTPS.
      */
     strictTransportSecurity:
       IS_PRODUCTION
         ? {
-          maxAge:
-            31536000,
-          includeSubDomains:
-            true,
-          preload:
-            true,
+          maxAge: 31536000,
+          includeSubDomains: true,
+          preload: true,
         }
         : false,
   })
@@ -332,17 +307,6 @@ app.use(
  * ==========================================
  * HTTP LOGGING
  * ==========================================
- *
- * Development:
- *
- *     dev
- *
- * Production:
- *
- *     combined
- *
- * Production logs should eventually be
- * forwarded to a centralized logging service.
  */
 
 app.use(
@@ -360,13 +324,11 @@ app.use(
  *
  * IMPORTANT:
  *
- * Payment providers may require the ORIGINAL
- * raw request body to verify their signature.
+ * This route MUST receive the raw body
+ * before express.json() processes it.
  *
- * Therefore this MUST be registered BEFORE
- * express.json().
- *
- * DO NOT move this below express.json().
+ * Payment providers use the raw payload
+ * to verify webhook signatures.
  */
 
 app.use(
@@ -381,29 +343,11 @@ app.use(
  * ==========================================
  * JSON BODY PARSER
  * ==========================================
- *
- * Limit request body size.
- *
- * This helps prevent attackers from sending
- * extremely large JSON payloads.
- *
- * 1 MB is a reasonable default for most
- * authentication/business APIs.
- *
- * If an endpoint genuinely needs larger
- * payloads, configure a route-specific parser.
  */
 
 app.use(
   express.json({
     limit: "1mb",
-
-    /**
-     * Strict JSON parsing.
-     *
-     * Only valid JSON objects/arrays are
-     * accepted.
-     */
     strict: true,
   })
 );
@@ -412,19 +356,12 @@ app.use(
  * ==========================================
  * URL-ENCODED BODY PARSER
  * ==========================================
- *
- * Limit URL-encoded request bodies as well.
  */
 
 app.use(
   express.urlencoded({
     extended: false,
     limit: "100kb",
-
-    /**
-     * Prevent extremely large numbers of
-     * parameters from being submitted.
-     */
     parameterLimit: 100,
   })
 );
@@ -433,11 +370,6 @@ app.use(
  * ==========================================
  * GLOBAL API RATE LIMITER
  * ==========================================
- *
- * Applies to every API route.
- *
- * Sensitive endpoints additionally have their
- * own stricter rate limiters.
  */
 
 app.use(
@@ -447,43 +379,42 @@ app.use(
 
 /**
  * ==========================================
- * HEALTH CHECK
+ * HEALTH CHECKS
  * ==========================================
  *
- * Keep the health endpoint outside the global
- * API limiter so infrastructure monitoring
- * isn't unnecessarily rate limited.
+ * Keep these outside the API rate limiter
+ * so deployment platforms and monitoring
+ * systems can access them reliably.
  */
 
+/**
+ * Root endpoint.
+ *
+ * Do not expose NODE_ENV here.
+ */
 app.get(
   "/",
-  (_req: Request, res: Response) => {
+  (
+    _req: Request,
+    res: Response
+  ) => {
     return res.status(200).json({
       success: true,
       message:
         "LocalLift API Running",
-      environment:
-        IS_PRODUCTION
-          ? "production"
-          : "development",
     });
   }
 );
 
 /**
- * ==========================================
- * API HEALTH CHECK
- * ==========================================
- *
- * Useful for deployment platforms and
- * monitoring systems.
- *
- * Keep the response minimal.
+ * Basic health endpoint.
  */
-
 app.get(
   "/health",
-  (_req: Request, res: Response) => {
+  (
+    _req: Request,
+    res: Response
+  ) => {
     return res.status(200).json({
       success: true,
       status: "healthy",
@@ -493,94 +424,63 @@ app.get(
 
 /**
  * ==========================================
- * ROUTE LOADER
- * ==========================================
- *
- * Safely register route modules.
- */
-
-const loadRoute = (
-  path: string,
-  router: express.Router
-) => {
-  try {
-    app.use(
-      path,
-      router
-    );
-  } catch (error) {
-    console.error(
-      `❌ Failed loading route: ${path}`,
-      error
-    );
-
-    /**
-     * Fail fast in production.
-     *
-     * A production API should not start
-     * successfully if an essential route
-     * failed to load.
-     */
-    if (IS_PRODUCTION) {
-      throw error;
-    }
-  }
-};
-
-/**
- * ==========================================
  * API ROUTES
  * ==========================================
+ *
+ * Register routes directly.
+ *
+ * This makes startup failures explicit
+ * instead of swallowing route errors.
  */
 
-loadRoute(
+app.use(
   `${API_PREFIX}/auth`,
   authRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/admin`,
   adminRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/business`,
   businessRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/subscription`,
   subscriptionRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/payments`,
   paymentRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/content`,
   contentRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/analytics`,
   analyticsRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/scheduler`,
   schedulerRoutes
 );
 
-loadRoute(
+app.use(
   `${API_PREFIX}/team`,
   teamRoutes
 );
 
 /**
  * ==========================================
- * DEBUG ROUTES
+ * DEVELOPMENT DEBUG ROUTES
  * ==========================================
  *
  * NEVER expose these in production.
@@ -589,76 +489,90 @@ loadRoute(
 if (!IS_PRODUCTION) {
   app.get(
     "/_debug/routes",
-    (_req, res) => {
+    (
+      _req: Request,
+      res: Response
+    ) => {
       const routes: Array<{
         method: string;
         path: string;
       }> = [];
 
-      const stack =
-        (app as any)._router
-          ?.stack ?? [];
+      /**
+       * Express internals are not part of
+       * the public TypeScript API.
+       *
+       * This route is development-only,
+       * so accessing the internal router
+       * is acceptable here.
+       */
+      const routerStack =
+        (
+          app as unknown as {
+            _router?: {
+              stack?: any[];
+            };
+          }
+        )._router?.stack ?? [];
 
-      stack.forEach(
-        (middleware: any) => {
-          /**
-           * Direct route.
-           */
-          if (
-            middleware.route
+      for (
+        const middleware of routerStack
+      ) {
+        if (
+          middleware.route
+        ) {
+          const methods =
+            Object.keys(
+              middleware.route.methods
+            );
+
+          for (
+            const method of methods
           ) {
             routes.push({
               method:
-                Object.keys(
-                  middleware
-                    .route
-                    .methods
-                )[0]
-                  .toUpperCase(),
-
+                method.toUpperCase(),
               path:
-                middleware
-                  .route
-                  .path,
+                middleware.route.path,
             });
-
-            return;
           }
 
-          /**
-           * Router middleware.
-           */
-          if (
-            middleware.name ===
-            "router"
-          ) {
-            middleware.handle.stack.forEach(
-              (
-                handler: any
-              ) => {
-                if (
-                  handler.route
-                ) {
-                  routes.push({
-                    method:
-                      Object.keys(
-                        handler
-                          .route
-                          .methods
-                      )[0]
-                        .toUpperCase(),
+          continue;
+        }
 
-                    path:
-                      handler
-                        .route
-                        .path,
-                  });
-                }
+        if (
+          middleware.name ===
+          "router"
+        ) {
+          const stack =
+            middleware.handle
+              ?.stack ?? [];
+
+          for (
+            const handler of stack
+          ) {
+            if (
+              handler.route
+            ) {
+              const methods =
+                Object.keys(
+                  handler.route.methods
+                );
+
+              for (
+                const method of methods
+              ) {
+                routes.push({
+                  method:
+                    method.toUpperCase(),
+                  path:
+                    handler.route.path,
+                });
               }
-            );
+            }
           }
         }
-      );
+      }
 
       return res.status(200).json({
         success: true,
@@ -668,7 +582,7 @@ if (!IS_PRODUCTION) {
   );
 
   console.log(
-    "\n📌 ROUTES LOADED SUCCESSFULLY\n"
+    "📌 Development debug routes enabled."
   );
 }
 
@@ -676,12 +590,6 @@ if (!IS_PRODUCTION) {
  * ==========================================
  * 404 HANDLER
  * ==========================================
- *
- * Do not expose the complete requested URL
- * in production.
- *
- * This prevents unnecessary information
- * disclosure through API responses/logs.
  */
 
 app.use(
@@ -689,6 +597,10 @@ app.use(
     req: Request,
     res: Response
   ) => {
+    /**
+     * Never expose the requested URL
+     * in production responses.
+     */
     if (IS_PRODUCTION) {
       return res.status(404).json({
         success: false,
@@ -712,37 +624,46 @@ app.use(
  * GLOBAL ERROR HANDLER
  * ==========================================
  *
- * This MUST be the final middleware.
- *
- * Never expose raw errors, stack traces,
- * database errors, JWT errors, or internal
- * implementation details to production clients.
+ * MUST remain the final middleware.
  */
 
 app.use(
   (
-    error: any,
+    error: unknown,
     _req: Request,
     res: Response,
     _next: NextFunction
   ) => {
     /**
-     * Log the actual error server-side.
+     * Log errors server-side.
      *
-     * Your production logging service should
-     * eventually capture this instead of relying
-     * only on console.error.
+     * Avoid returning these details to
+     * clients in production.
      */
-    console.error(
-      "[GLOBAL ERROR]",
-      error
-    );
+    if (error instanceof Error) {
+      console.error(
+        "[GLOBAL ERROR]",
+        error.message
+      );
+
+      if (!IS_PRODUCTION) {
+        console.error(
+          error.stack
+        );
+      }
+    } else {
+      console.error(
+        "[GLOBAL ERROR]",
+        error
+      );
+    }
 
     /**
-     * Handle CORS errors.
+     * CORS error.
      */
     if (
-      error?.message ===
+      error instanceof Error &&
+      error.message ===
       "CORS origin not allowed"
     ) {
       return res.status(403).json({
@@ -753,7 +674,7 @@ app.use(
     }
 
     /**
-     * Handle JSON parsing errors.
+     * Invalid JSON.
      */
     if (
       error instanceof SyntaxError &&
@@ -767,10 +688,17 @@ app.use(
     }
 
     /**
-     * Handle request body too large.
+     * Request body too large.
      */
     if (
-      error?.type ===
+      typeof error === "object" &&
+      error !== null &&
+      "type" in error &&
+      (
+        error as {
+          type?: string;
+        }
+      ).type ===
       "entity.too.large"
     ) {
       return res.status(413).json({
@@ -781,8 +709,15 @@ app.use(
     }
 
     /**
-     * Never expose internal errors
-     * in production.
+     * Production response.
+     *
+     * Never expose:
+     *
+     * - stack traces
+     * - MongoDB errors
+     * - JWT errors
+     * - filesystem paths
+     * - internal service information
      */
     if (IS_PRODUCTION) {
       return res.status(500).json({
@@ -794,14 +729,13 @@ app.use(
 
     /**
      * Development response.
-     *
-     * Useful while debugging locally.
      */
     return res.status(500).json({
       success: false,
       message:
-        error?.message ??
-        "Internal server error.",
+        error instanceof Error
+          ? error.message
+          : "Internal server error.",
     });
   }
 );

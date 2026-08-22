@@ -155,7 +155,7 @@ const StaffInvitationSchema =
                  * Example:
                  *
                  * StaffInvitation.findOne(...)
-                 *   .select("+token")
+                 *     .select("+token")
                  */
                 select: false,
 
@@ -183,12 +183,17 @@ const StaffInvitationSchema =
              * ==========================================
              * EXPIRATION
              * ==========================================
+             *
+             * IMPORTANT:
+             *
+             * Do NOT use `index: true` here.
+             *
+             * The explicit TTL index below already
+             * creates the required index on expiresAt.
              */
             expiresAt: {
                 type: Date,
                 required: true,
-
-                index: true,
             },
 
             /**
@@ -307,7 +312,9 @@ StaffInvitationSchema.path(
     ): boolean {
         return (
             value instanceof Date &&
-            !Number.isNaN(value.getTime()) &&
+            !Number.isNaN(
+                value.getTime()
+            ) &&
             value.getTime() > Date.now()
         );
     },

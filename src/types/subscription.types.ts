@@ -1,29 +1,69 @@
-import { PLANS } from "../constants/plans";
+/**
+ * ==========================================
+ * SUBSCRIPTION TYPES
+ * ==========================================
+ *
+ * Shared types for:
+ *
+ * - Subscription plans
+ * - Plan entitlements
+ * - Usage limits
+ * - Features
+ * - Queue priority
+ * - Subscription status
+ *
+ * PlanKey is intentionally defined here
+ * independently from PLANS to avoid circular
+ * type dependencies.
+ */
 
 /**
- * Available subscription plans.
+ * ==========================================
+ * AVAILABLE SUBSCRIPTION PLANS
+ * ==========================================
  */
-export type PlanKey = keyof typeof PLANS;
+
+export type PlanKey =
+  | "FREE"
+  | "STARTER"
+  | "GROWTH"
+  | "PRO";
 
 /**
- * Queue priority for AI generation.
+ * ==========================================
+ * QUEUE PRIORITY
+ * ==========================================
+ *
+ * Higher number = higher queue priority.
+ *
+ * FREE    = 0
+ * STARTER = 1
+ * GROWTH  = 2
+ * PRO     = 3
  */
+
 export type Priority =
-  | "LOW"
-  | "MEDIUM"
-  | "HIGH"
-  | "HIGHEST";
+  | 0
+  | 1
+  | 2
+  | 3;
 
 /**
- * Supported download resolutions.
+ * ==========================================
+ * SUPPORTED DOWNLOAD RESOLUTIONS
+ * ==========================================
  */
+
 export type Resolution =
   | "720p"
   | "1080p";
 
 /**
- * Feature flags available across subscription plans.
+ * ==========================================
+ * FEATURE FLAGS
+ * ==========================================
  */
+
 export interface PlanFeatures {
   watermark: boolean;
   branding: boolean;
@@ -36,16 +76,22 @@ export interface PlanFeatures {
 }
 
 /**
- * Usage limits for a subscription plan.
+ * ==========================================
+ * PLAN LIMITS
+ * ==========================================
  */
+
 export interface PlanLimits {
   imageGenerations: number;
   maxResolution: Resolution;
 }
 
 /**
- * Complete entitlement for a subscription plan.
+ * ==========================================
+ * PLAN ENTITLEMENT
+ * ==========================================
  */
+
 export interface PlanEntitlement {
   id: PlanKey;
   name: string;
@@ -57,8 +103,11 @@ export interface PlanEntitlement {
 }
 
 /**
- * Tracks a user's current usage during the billing period.
+ * ==========================================
+ * USAGE SUMMARY
+ * ==========================================
  */
+
 export interface UsageSummary {
   imageGenerations: number;
   downloads: number;
@@ -67,8 +116,11 @@ export interface UsageSummary {
 }
 
 /**
- * Subscription status.
+ * ==========================================
+ * SUBSCRIPTION STATUS
+ * ==========================================
  */
+
 export type SubscriptionStatus =
   | "ACTIVE"
   | "EXPIRED"
@@ -77,15 +129,21 @@ export type SubscriptionStatus =
   | "PAST_DUE";
 
 /**
- * Billing cycle.
+ * ==========================================
+ * BILLING CYCLE
+ * ==========================================
  */
+
 export type BillingCycle =
   | "MONTHLY"
   | "YEARLY";
 
 /**
- * Information returned when checking a user's subscription.
+ * ==========================================
+ * SUBSCRIPTION INFO
+ * ==========================================
  */
+
 export interface SubscriptionInfo {
   plan: PlanKey;
   status: SubscriptionStatus;

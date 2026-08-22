@@ -1,4 +1,35 @@
-export const PLANS = {
+import {
+  PlanEntitlement,
+  PlanKey,
+} from "../types/subscription.types";
+
+/**
+ * ==========================================
+ * SUBSCRIPTION PLANS
+ * ==========================================
+ *
+ * Central source of truth for:
+ *
+ * - Pricing
+ * - Billing duration
+ * - Usage limits
+ * - Features
+ * - Queue priority
+ *
+ * Prices are controlled by the backend.
+ * Never trust prices received from clients.
+ */
+
+export const PLANS: Record<
+  PlanKey,
+  PlanEntitlement
+> = {
+  /**
+   * ==========================================
+   * FREE
+   * ==========================================
+   */
+
   FREE: {
     id: "FREE",
     name: "Free",
@@ -24,6 +55,12 @@ export const PLANS = {
     // Lowest queue priority
     priority: 0,
   },
+
+  /**
+   * ==========================================
+   * STARTER
+   * ==========================================
+   */
 
   STARTER: {
     id: "STARTER",
@@ -51,6 +88,12 @@ export const PLANS = {
     priority: 1,
   },
 
+  /**
+   * ==========================================
+   * GROWTH
+   * ==========================================
+   */
+
   GROWTH: {
     id: "GROWTH",
     name: "Growth",
@@ -77,6 +120,12 @@ export const PLANS = {
     priority: 2,
   },
 
+  /**
+   * ==========================================
+   * PRO
+   * ==========================================
+   */
+
   PRO: {
     id: "PRO",
     name: "Pro",
@@ -102,8 +151,13 @@ export const PLANS = {
     // Highest queue priority
     priority: 3,
   },
-} as const;
+};
 
-export type PlanKey = keyof typeof PLANS;
+/**
+ * ==========================================
+ * PLAN TYPE
+ * ==========================================
+ */
 
-export type Plan = (typeof PLANS)[PlanKey];
+export type Plan =
+  (typeof PLANS)[PlanKey];

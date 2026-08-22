@@ -1,49 +1,117 @@
 import axios from "axios";
 
-console.log(
-    "PAYSTACK FROM CLIENT:",
-    process.env.PAYSTACK_SECRET_KEY
-);
+/**
+ * ==========================================
+ * ENVIRONMENT VALIDATION
+ * ==========================================
+ */
 
-console.log(
-    "KORA FROM CLIENT:",
-    process.env.KORA_SECRET_KEY
-);
+const PAYSTACK_SECRET_KEY =
+    process.env.PAYSTACK_SECRET_KEY?.trim();
+
+const KORA_SECRET_KEY =
+    process.env.KORA_SECRET_KEY?.trim();
+
+const PAYSTACK_BASE_URL =
+    process.env.PAYSTACK_BASE_URL?.trim() ||
+    "https://api.paystack.co";
+
+const KORA_BASE_URL =
+    process.env.KORA_BASE_URL?.trim() ||
+    "https://api.korapay.com";
+
+/**
+ * ==========================================
+ * VALIDATE PAYMENT CONFIGURATION
+ * ==========================================
+ */
+
+if (!PAYSTACK_SECRET_KEY) {
+    throw new Error(
+        "PAYSTACK_SECRET_KEY is not configured."
+    );
+}
+
+if (!KORA_SECRET_KEY) {
+    throw new Error(
+        "KORA_SECRET_KEY is not configured."
+    );
+}
+
+/**
+ * ==========================================
+ * KORA CLIENT
+ * ==========================================
+ */
 
 export const koraClient = axios.create({
-    baseURL:
-        process.env.KORA_BASE_URL ||
-        "https://api.korapay.com",
+    baseURL: KORA_BASE_URL,
+
     headers: {
-        "Content-Type": "application/json",
+        "Content-Type":
+            "application/json",
     },
+
+    timeout: 15000,
 });
+
+/**
+ * ==========================================
+ * PAYSTACK CLIENT
+ * ==========================================
+ */
 
 export const paystackClient = axios.create({
-    baseURL:
-        process.env.PAYSTACK_BASE_URL ||
-        "https://api.paystack.co",
+    baseURL: PAYSTACK_BASE_URL,
+
     headers: {
-        "Content-Type": "application/json",
+        "Content-Type":
+            "application/json",
     },
+
+    timeout: 15000,
 });
 
-paystackClient.interceptors.request.use((config) => {
-    console.log(
-        "PAYSTACK REQUEST KEY:",
-        process.env.PAYSTACK_SECRET_KEY
-    );
+/**
+ * ==========================================
+ * PAYSTACK AUTHENTICATION
+ * ==========================================
+ */
 
-    config.headers.Authorization =
-        `Bearer ${process.env.PAYSTACK_SECRET_KEY}`;
+paystackClient.interceptors.request.use(
+    (config) => {
+        config.headers =
+            config.headers ?? {};
 
-    return config;
-});
+        config.headers.Authorization =
+            `Bearer ${PAYSTACK_SECRET_KEY}`;
 
-koraClient.interceptors.request.use((config) => {
-    config.headers.Authorization =
-        `Bearer ${process.env.KORA_SECRET_KEY}`;
+        return config;
+    },
 
-    return config;
+    (error) => {
+        return Promise.reject(error);
+    }
+);
 
-});
+/**
+ * ==========================================
+ * KORA AUTHENTICATION
+ * ==========================================
+ */
+
+koraClient.interceptors.request.use(
+    (config) => {
+        config.headers =
+            config.headers ?? {};
+
+        config.headers.Authorization =
+            `Bearer ${KORA_SECRET_KEY}`;
+
+        return config;
+    },
+
+    (error) => {
+        return Promise.reject(error);
+    }
+);

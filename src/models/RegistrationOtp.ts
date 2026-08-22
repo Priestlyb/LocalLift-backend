@@ -62,10 +62,20 @@ export interface IRegistrationOtp
     updatedAt: Date;
 }
 
+/**
+ * ==========================================
+ * SCHEMA
+ * ==========================================
+ */
+
 const registrationOtpSchema =
     new Schema<IRegistrationOtp>(
         {
             /**
+             * ==========================================
+             * USER
+             * ==========================================
+             *
              * Optional reference to the user.
              *
              * Currently not required by the registration
@@ -79,75 +89,122 @@ const registrationOtpSchema =
             },
 
             /**
-             * Registration name.
+             * ==========================================
+             * REGISTRATION NAME
+             * ==========================================
              */
             name: {
                 type: String,
                 required: true,
                 trim: true,
+
                 minlength: 1,
                 maxlength: 100,
             },
 
             /**
-             * Normalized email.
+             * ==========================================
+             * EMAIL
+             * ==========================================
              *
-             * The controller should normalize the email
-             * before creating/updating this document.
+             * Always store a normalized email.
+             *
+             * IMPORTANT:
+             *
+             * Do not use `index: true` here because
+             * the explicit unique index below already
+             * creates the required index.
              */
             email: {
                 type: String,
                 required: true,
+
                 lowercase: true,
                 trim: true,
+
                 minlength: 5,
                 maxlength: 254,
-                unique: true,
-                index: true,
             },
 
             /**
-             * Password hash.
+             * ==========================================
+             * PASSWORD HASH
+             * ==========================================
              *
              * IMPORTANT:
-             * This is NOT the plaintext password.
              *
-             * select: false prevents accidental exposure
-             * when RegistrationOtp documents are queried.
+             * This must NEVER contain the plaintext
+             * password.
+             *
+             * The registration service/controller
+             * should hash the password before saving.
              */
             password: {
                 type: String,
                 required: true,
+
+                /**
+                 * Never return the password hash
+                 * unless explicitly requested.
+                 */
                 select: false,
             },
 
             /**
-             * Hashed OTP.
+             * ==========================================
+             * OTP HASH
+             * ==========================================
              *
-             * Never store the plaintext OTP in MongoDB.
+             * IMPORTANT:
+             *
+             * Never store the plaintext OTP.
+             *
+             * The OTP should be hashed before being
+             * saved to MongoDB.
              */
             otp: {
                 type: String,
                 required: true,
+
+                /**
+                 * Never return the OTP hash by default.
+                 */
                 select: false,
+
+                /**
+                 * SHA-256 produces a 64-character
+                 * hexadecimal hash.
+                 *
+                 * Keep this validation only if your
+                 * registration service uses SHA-256.
+                 */
+                minlength: 64,
+                maxlength: 64,
+
+                match: /^[a-f0-9]{64}$/i,
             },
 
             /**
-             * OTP expiration.
+             * ==========================================
+             * OTP EXPIRATION
+             * ==========================================
              *
-             * MongoDB TTL index below automatically removes
-             * expired registration documents.
+             * Do NOT use `index: true` here.
+             *
+             * The explicit TTL index below handles
+             * automatic expiration.
              */
             expiresAt: {
                 type: Date,
                 required: true,
-                index: true,
             },
 
             /**
-             * Timestamp of the most recently sent OTP.
+             * ==========================================
+             * LAST SENT AT
+             * ==========================================
              *
-             * Used to enforce the resend cooldown.
+             * Used to enforce the OTP resend cooldown.
              */
             lastSentAt: {
                 type: Date,
@@ -156,42 +213,84 @@ const registrationOtpSchema =
             },
 
             /**
-             * Number of OTPs generated.
+             * ==========================================
+             * OTP GENERATION ATTEMPTS
+             * ==========================================
              *
-             * The controller/service currently allows
-             * a maximum of 5 OTP generations.
+             * Number of OTPs generated for this
+             * registration attempt.
+             *
+             * Current application limit:
+             *
+             * Maximum 5 OTP generations.
              */
             attempts: {
                 type: Number,
                 required: true,
                 default: 1,
+
                 min: 1,
                 max: 5,
+
+                validate: {
+                    validator: (
+                        value: number
+                    ): boolean =>
+                        Number.isSafeInteger(
+                            value
+                        ),
+
+                    message:
+                        "OTP generation attempts must be a safe integer.",
+                },
             },
 
             /**
-             * Number of failed OTP verification attempts.
+             * ==========================================
+             * VERIFICATION ATTEMPTS
+             * ==========================================
              *
-             * The OTP service currently allows a maximum
-             * of 5 failed verification attempts.
+             * Number of failed OTP verification
+             * attempts.
+             *
+             * Current application limit:
+             *
+             * Maximum 5 failed attempts.
              */
             verificationAttempts: {
                 type: Number,
                 required: true,
                 default: 0,
+
                 min: 0,
                 max: 5,
+
+                validate: {
+                    validator: (
+                        value: number
+                    ): boolean =>
+                        Number.isSafeInteger(
+                            value
+                        ),
+
+                    message:
+                        "Verification attempts must be a safe integer.",
+                },
             },
         },
+
         {
+            /**
+             * Automatically maintain:
+             *
+             * createdAt
+             * updatedAt
+             */
             timestamps: true,
 
             /**
-             * Prevent unexpected fields from being persisted.
-             *
-             * Mongoose strict mode is enabled by default,
-             * but explicitly keeping it here makes the
-             * security intention clear.
+             * Prevent unexpected fields from
+             * being persisted.
              */
             strict: true,
         }
@@ -204,7 +303,15 @@ const registrationOtpSchema =
  */
 
 /**
- * One pending registration per email.
+ * ==========================================
+ * UNIQUE EMAIL INDEX
+ * ==========================================
+ *
+ * Allows only one pending registration
+ * record for an email address.
+ *
+ * This replaces the previous `index: true`
+ * on the email field.
  */
 registrationOtpSchema.index(
     {
@@ -216,11 +323,21 @@ registrationOtpSchema.index(
 );
 
 /**
- * Automatically delete expired registration
- * documents.
+ * ==========================================
+ * TTL INDEX
+ * ==========================================
+ *
+ * Automatically deletes expired registration
+ * OTP documents.
  *
  * MongoDB's TTL monitor normally checks
  * approximately once every 60 seconds.
+ *
+ * IMPORTANT:
+ *
+ * TTL cleanup does NOT replace the runtime
+ * expiration check in the OTP verification
+ * service.
  */
 registrationOtpSchema.index(
     {
@@ -233,25 +350,28 @@ registrationOtpSchema.index(
 
 /**
  * ==========================================
- * VALIDATION
+ * EXPIRATION VALIDATION
  * ==========================================
- */
-
-/**
- * Make sure the expiration time is actually
- * in the future when a document is created.
  *
- * Note:
- * This does not replace the runtime expiration
- * check inside otp.service.ts.
+ * Make sure newly created OTP records have
+ * an expiration time in the future.
+ *
+ * This does NOT replace the runtime expiration
+ * check during OTP verification.
  */
 registrationOtpSchema.path(
     "expiresAt"
 ).validate({
     validator: function (
         value: Date
-    ) {
-        return value.getTime() > Date.now();
+    ): boolean {
+        return (
+            value instanceof Date &&
+            !Number.isNaN(
+                value.getTime()
+            ) &&
+            value.getTime() > Date.now()
+        );
     },
 
     message:
