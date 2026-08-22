@@ -21,7 +21,8 @@ export const PLANS = {
       multipleBrands: false,
     },
 
-    priority: "LOW",
+    // Lowest queue priority
+    priority: 0,
   },
 
   STARTER: {
@@ -46,7 +47,8 @@ export const PLANS = {
       multipleBrands: false,
     },
 
-    priority: "MEDIUM",
+    // Low queue priority
+    priority: 1,
   },
 
   GROWTH: {
@@ -71,7 +73,8 @@ export const PLANS = {
       multipleBrands: false,
     },
 
-    priority: "HIGH",
+    // High queue priority
+    priority: 2,
   },
 
   PRO: {
@@ -96,9 +99,11 @@ export const PLANS = {
       multipleBrands: true,
     },
 
-    priority: "HIGHEST",
+    // Highest queue priority
+    priority: 3,
   },
 } as const;
 
 export type PlanKey = keyof typeof PLANS;
+
 export type Plan = (typeof PLANS)[PlanKey];
